@@ -215,15 +215,19 @@ var AI_Shoe_CEP = (function () {
         app.activeDocument=t.parent;documentFor(t.parent.id,true);t.parent.activeLayer=find(t.parent.layers,t.layerId);
         // Replace an independent parent instance so shared embedded contents cannot
         // leave the visible layer pointing at a stale/shared object.
-        var originalTarget=find(t.parent.layers,t.layerId);
-        if(!originalTarget)throw Error('回写后找不到目标智能对象');
-        app.activeDocument=t.parent; t.parent.activeLayer=originalTarget;
-        executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);
-        var target=t.parent.activeLayer;
+        var originalTarget=find(t.parent.layers,t.layerId),target=null;
+        if(t.parentTargetId) target=find(t.parent.layers,t.parentTargetId);
+        if(!target){
+          if(!originalTarget)throw Error('回写后找不到目标智能对象');
+          app.activeDocument=t.parent; t.parent.activeLayer=originalTarget;
+          executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);
+          target=t.parent.activeLayer; target.visible=true; originalTarget.visible=false;
+          t.parentTargetId=target.id;
+        }
         var desc=new ActionDescriptor();desc.putPath(c('null'),new File(a.contentFile));executeAction(s('placedLayerReplaceContents'),desc,DialogModes.NO);
-        target.visible=true; originalTarget.visible=false; t.parent.activeLayer=target;
+        target.visible=true; t.parent.activeLayer=target;
         try { app.refresh(); } catch(ignoreRefresh) {}
-        return {layerId:target.id,originalLayerId:originalTarget.id,visible:target.visible,documentId:t.parent.id,contentFile:a.contentFile};
+        return {layerId:target.id,originalLayerId:t.layerId,visible:target.visible,documentId:t.parent.id,contentFile:a.contentFile};
       }catch(e){app.activeDocument=t.doc;t.doc.activeHistoryState=internalHistory;app.activeDocument=t.parent;t.parent.activeHistoryState=parentHistory;throw e;}finally{app.activeDocument=t.parent;}
     },
     exportMarked:function(a){
