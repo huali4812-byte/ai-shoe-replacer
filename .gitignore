@@ -1,0 +1,11 @@
+.DS_Store
+.shoe-vision-venv/
+.shoe-vision-venv-x86/
+outputs/
+backups/
+node_modules/
+*.psb
+*.psd
+*.ccx
+
+/scripts/node_modules

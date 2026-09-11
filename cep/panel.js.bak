@@ -1,0 +1,106 @@
+(function () {
+  const $=id=>document.getElementById(id), cs=new CSInterface();
+  let fs,path,os,api,flow,folder;
+  try {const req=typeof require==='function'?require:window.cep_node.require;fs=req('fs');path=req('path');os=req('os');folder=path.dirname(decodeURIComponent(location.pathname));api=req(path.join(folder,'api.cjs'));flow=req(path.join(folder,'workflow.cjs'));}
+  catch(e){$('message').textContent='无法加载本机模块：'+e.message;return;}
+  const state={scan:null,products:[],materials:[],tasks:[],busy:false,targetSku:''};
+  function host(method,args){return new Promise((resolve,reject)=>cs.evalScript('AI_Shoe_CEP.dispatch('+JSON.stringify(method)+','+JSON.stringify(args||{})+')',raw=>{try{const r=JSON.parse(raw);if(!r.ok)throw Error(r.error);resolve(r.data);}catch(e){reject(e);}}));}
+  function message(t){$('message').textContent=t;}
+  async function act(fn){if(state.busy)return;state.busy=true;try{render();await fn();}catch(e){message('操作失败：'+e.message);}finally{state.busy=false;try{render();}catch(e){message('面板刷新失败：'+e.message);}}}
+  function button(text,fn,disabled){const b=document.createElement('button');b.textContent=text;b.disabled=state.busy||disabled;b.onclick=()=>act(fn);return b;}
+  function report(t){flow.writeReport(t.folder,{id:t.id,documentId:t.documentId,layerId:t.layerId,name:t.name,slot:t.slot,product:t.product,material:t.material,region:t.region,status:t.status,verification:t.verification,error:t.error});}
+  async function generateTask(t){
+        t.confirmed=true;flow.validateTask(t);
+        const input=path.join(t.folder,'composite.png');await host('exportPrepared',{id:t.id,output:input});
+        t.status='生成中';report(t);message(t.product.sku+' '+t.product.color+'：正在局部融合');
+        let seconds=0;const timer=setInterval(()=>message('局部融合等待 '+(++seconds)+' 秒'),1000);
+        try {
+          const output=await api.generate(input,t.material.references,'第一张图是已合成真实鞋素材的局部画面。目标货号 '+t.product.sku+'，色号 '+t.product.color+'。其余图片是该款色唯一素材组的多角度参考。仅改善鞋与袜子、地面交界和必要阴影；保持真实鞋 Logo、纹理、鞋型和配色，禁止重新设计商品。输出与第一张图完全相同的像素尺寸。');
+          t.verification=flow.protect(path.join(t.folder,'original.png'),path.join(t.folder,'mask.png'),output,path.join(t.folder,'protected.png'));
+          await host('apply',{id:t.id,output:path.join(t.folder,'protected.png')});t.status='已回写工作副本，待人工验收';
+        } catch(e){t.status='失败，未回写 AI 结果';t.error=e.message;throw e;}
+        finally{clearInterval(timer);report(t);}
+        message(t.status);
+
+  }
+  function rebuild(){
+    if(!state.scan)return;
+    state.tasks=[];
+    state.scan.tasks.forEach(candidate=>{for(let slot=0;slot<1;slot++){
+      const options=state.products.filter(p=>p.sku.trim()===state.targetSku&&p.role===candidate.role);
+      const product=candidate.role!=='双鞋'&&options.length===1?options[0]:null;
+      state.tasks.push({...candidate,id:Date.now()+'-'+candidate.layerId+'-'+slot,slot:slot+1,product,confirmed:false,status:product?'待素材匹配':candidate.role==='双鞋'?'已跳过：紫色双人款暂不处理':options.length>1?'已跳过：Excel 同款同角色存在多个颜色':'已跳过：未选择新货号或所选货号缺少该角色款色'});
+    }});
+    matchAll();
+  }
+  function matchAll(){state.tasks.forEach(t=>{if(t.region)return;t.material=null;if(!t.product)return;try{t.material=flow.matchMaterial(state.materials,t.product);t.status='待处理';}catch(e){t.status='已跳过：'+e.message;}});}
+  function render(){
+    ['scan','working','excel','library','apiTest','save','diagnostics','bindMaterial','libraryPath','cutout','referenceFiles','materialProduct'].forEach(id=>$(id).disabled=state.busy);
+    const locked=state.tasks.some(t=>t.region);
+    ['targetSku','scan','working','excel','library','libraryPath','bindMaterial'].forEach(id=>$(id).disabled=state.busy||locked);
+    $('save').disabled=state.busy||!state.scan||!state.scan.working;
+    $('tasks').replaceChildren();
+    $('count').textContent=state.tasks.length+' 个鞋位任务';
+    state.tasks.forEach(t=>{
+      const row=document.createElement('article');row.className='task';
+      const title=document.createElement('strong');title.textContent=t.name+' · '+t.role+' · 鞋位 '+t.slot;row.appendChild(title);
+      const details=document.createElement('p');details.textContent='图层 '+t.layerId+' ｜区域 '+(t.region?t.region.box.join(', '):'未确认');row.appendChild(details);
+      const assigned=document.createElement('p');assigned.textContent=t.product?'目标：'+t.product.sku+' | '+t.product.color+' | '+t.product.role:'目标：无唯一对应款色';row.appendChild(assigned);
+      const status=document.createElement('p');status.textContent=t.status;row.appendChild(status);
+      row.appendChild(button('定位图层',async()=>{await host('selectLayer',t);message('已定位图层，等待鞋位选区');},!state.scan.working||!!t.region));
+      $('tasks').appendChild(row);
+    });
+  }
+  $('scan').onclick=()=>act(async()=>{state.scan=await host('scan');$('doc').textContent=state.scan.document+' ｜扫描 '+state.scan.scanned+' 层 ｜标签 '+JSON.stringify(state.scan.labels)+' ｜读取错误 '+state.scan.errors.length;rebuild();if(state.scan.errors.length)throw Error('存在读取错误，请导出扫描诊断');message('标记扫描完成。'+(state.materials.length?'已读取素材库，请检查任务匹配状态。':'尚未读取素材库，请确认目录后点击“读取素材库”。'));});
+  $('working').onclick=()=>act(async()=>{state.scan=await host('createWorking');$('doc').textContent=state.scan.document+' ｜工作副本 ｜'+state.scan.scanned+' 层';rebuild();message('已创建工作副本，原文档保留');});
+  $('excel').onchange=e=>{const file=e.target.files[0];if(file)act(async()=>{state.products=[];state.targetSku="";state.materials=[];$("targetSku").replaceChildren(new Option("请选择新货号",""));rebuild();$('materialProduct').replaceChildren();const r=flow.readExcel(file.path);state.products=r.products;Array.from(new Set(r.products.map(p=>p.sku.trim()))).forEach(sku=>$("targetSku").add(new Option(sku,sku)));r.products.forEach(p=>{const label=p.sku+' | '+p.color+' | '+p.role;$('materialProduct').add(new Option(label,p.id));});$('fileName').textContent=file.name+' ｜'+r.products.length+' 款色';rebuild();message(r.warnings.join('；')||'Excel 规则读取完成，已加载 '+r.products.length+' 个目标款色');});};
+  $('batch').onclick=()=>act(async()=>{
+    if(!state.scan)throw Error('请先扫描 PSB 标记');
+    if(!state.scan.working){state.scan=await host('createWorking');rebuild();}
+    const ready=state.tasks.filter(t=>t.material&&t.product&&!t.preview);
+    if(!ready.length)throw Error('没有待生成的已匹配任务');
+    const dir=path.join(os.homedir(),'Pictures','AI-Shoe-Preview',String(Date.now()));fs.mkdirSync(dir,{recursive:true});
+    const exported=[];
+    // Finish every Photoshop export before starting any generation or writeback.
+    for(const t of ready){try{
+      t.input=path.join(dir,t.id+'.png');
+      t.status='自动进入智能对象并定位鞋部';render();
+      t.protection=await host('autoPrepareSmart',{id:t.id,documentId:t.documentId,layerId:t.layerId,diagnostic:path.join(dir,t.id+'-structure.json')});
+      t.exportBox=(await host('exportSmart',{id:t.id,output:t.input})).box;
+      t.status='排队';exported.push(t);
+    }catch(e){t.status='导出失败：'+e.message;}render();}
+    let next=0;
+    async function worker(){while(next<exported.length){const t=exported[next++];try{
+      t.status='AI 生成中';render();
+      t.preview=await api.generate(t.input,t.material.references,'第一张图是原画面，其余为目标鞋参考图。替换为 '+t.product.sku+' '+t.product.color+'，仅改变鞋和接触阴影，保持构图和比例。',{taskId:t.id});
+      t.status='已生成，待保护回写';
+    }catch(e){t.status='生成失败：'+e.message;}render();}}
+    await Promise.all([worker(),worker(),worker(),worker()]);
+    let written=0;
+    for(const t of exported){if(!t.preview)continue;try{
+      await host('applySmart',{contentFile:path.join(dir,t.id+'-content.psb'),documentId:t.documentId,layerId:t.layerId,output:t.preview,box:t.exportBox,id:t.id,name:'[AI-Shoe] '+t.product.sku+' '+t.product.color});
+      t.status='已保护回写';written++;
+    }catch(e){t.status='预览已保留，未回写：'+e.message;}render();}
+    fs.writeFileSync(path.join(dir,'report.json'),JSON.stringify(exported,null,2));
+    if(written){const saved=await host('saveCopy',{documentId:state.scan.documentId});message('回写 '+written+' 张；'+(saved.path||'已取消保存'));}
+    else message('生成结果已保留；没有可安全回写的任务。详情：'+path.join(dir,'report.json'));
+  });
+  $('targetSku').onchange=()=>{state.targetSku=$('targetSku').value;state.materials=[];rebuild();render();message('已切换新货号，请检索素材；红标主推、绿标次推');};
+  async function loadLibrary(){
+    if(!state.targetSku)throw Error('请先选择新货号');
+    if(!state.scan)throw Error('请先扫描 PSB 标记');
+    const products=Array.from(new Map(state.tasks.filter(t=>t.product).map(t=>[t.product.id,t.product])).values());
+    state.materials=[];matchAll();
+    if(!products.length){message('全部跳过：所选新货号没有适用于当前标记的唯一款色；未调用 Eagle');render();return;}
+    message('正在检索 '+products.length+' 个已匹配款色');
+    state.materials=await flow.indexLibrary($('libraryPath').value.trim(),(n,total)=>message('正在检索 '+n+' / '+total),products);
+    matchAll();message('已取得 '+state.materials.length+' 个素材组；请查看任务匹配结果');render();
+  }
+  $('library').onclick=()=>act(async()=>{if(!state.products.length)throw Error('请先选择 Excel，插件需要用其中的货号检索 Eagle');await loadLibrary();});
+  $('scan').onclick=()=>act(async()=>{state.scan=await host('scan');$('doc').textContent=state.scan.document+' ｜扫描 '+state.scan.scanned+' 层 ｜标签 '+JSON.stringify(state.scan.labels)+' ｜读取错误 '+state.scan.errors.length;rebuild();if(state.scan.errors.length)throw Error('存在读取错误，请导出扫描诊断');message('标记扫描完成。'+(state.materials.length?'已读取素材库，请检查任务匹配状态。':'尚未读取素材库，请确认目录后点击“读取素材库”。'));});
+  $('bindMaterial').onclick=()=>act(async()=>{const product=state.products.find(p=>p.id===$('materialProduct').value),file=$('cutout').files[0];if(!file)throw Error('请选择透明鞋素材 PNG');flow.registerMaterial($('libraryPath').value.trim(),product,file.path,Array.from($('referenceFiles').files).map(f=>f.path));await loadLibrary();});
+  $('apiTest').onclick=()=>act(async()=>{const r=await api.test();message(r.model+'：接口连通，/v1/chat/completions；尚未验证本次任务出图');});
+  $('diagnostics').onclick=()=>act(async()=>{if(!state.scan)throw Error('请先扫描');const out=path.join(os.homedir(),'Desktop','shoe-scan-'+Date.now()+'.json');fs.writeFileSync(out,JSON.stringify(state.scan,null,2));message(out);});
+  $('save').onclick=()=>act(async()=>{const r=await host('saveCopy',{documentId:state.scan.documentId});message(r.cancelled?'已取消另存':r.path);});
+  render();
+}());

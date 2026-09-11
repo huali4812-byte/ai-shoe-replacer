@@ -1,0 +1,15 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const {parseWorkbook,layerRole,matchProduct}=require('../rules');
+const result=parseWorkbook(fs.readFileSync(process.argv[2]));
+assert.equal(result.products.length,6);
+assert.deepEqual(result.products.map(p=>p.role),['主推','次推','次推','主推','主推','次推']);
+assert.equal(result.products[1].sku,'GW/Y1972');
+assert.equal(result.products[4].color,'藕粉');
+assert.equal(layerRole({_value:'grain'}),'次推');
+assert.equal(layerRole({_value:'violet'}),'双鞋');
+assert.equal(matchProduct(result.products,'模板/GW2000/图层1192','主推')[0].color,'藕粉');
+assert.equal(matchProduct(result.products,'模板/GW20001/图层1192','主推').length,0);
+assert.equal(matchProduct(result.products,'模板/图层1192','主推').length,0);
+assert.throws(()=>parseWorkbook(new Uint8Array([1,2,3])));
+console.log('PASS: 真实 Excel 6 款色、合并货号、字体与富文本标色、完整货号匹配、无效文件');

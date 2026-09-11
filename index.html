@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>AI 换鞋 Demo</title><link rel="stylesheet" href="styles.css"></head>
+<body><main>
+<header><h1>AI 换鞋 Demo</h1><span class="badge">本地流程测试</span></header>
+<p id="docStatus">尚未读取文档</p>
+<section><h2>数据</h2><button id="pickExcel">导入 Excel</button><p id="excelName">未选择</p><p id="rulesInfo"></p></section>
+<section><h2>标色图层</h2><div class="actions"><button id="scan">扫描当前文档</button><button id="report">导出任务报告</button></div><p id="taskCount">0 个图层</p><div id="tasks"></div></section>
+<section><h2>测试执行</h2><div class="progress"><div id="progressBar"></div></div><p id="progressText">尚未创建测试图层</p><div class="actions"><button id="start" class="primary">创建测试图层</button><button id="pause" disabled>暂停</button></div></section>
+<section><h2>图像生成</h2><p>Nano Banana 2：未连接</p><p>公司素材库：离线</p></section>
+<footer id="message" role="status">就绪</footer>
+</main><script src="index.js"></script></body></html>

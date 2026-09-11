@@ -1,0 +1,10 @@
+{
+  "manifestVersion": 5,
+  "id": "com.demo.ai-shoe-replacer",
+  "name": "AI 换鞋 Demo",
+  "version": "0.2.0",
+  "requiredPermissions": { "localFileSystem": "request" },
+  "main": "index.html",
+  "host": { "app": "PS", "minVersion": "26.0.0" },
+  "entrypoints": [{ "type": "panel", "id": "main", "label": "AI 换鞋 Demo", "minimumSize": { "width": 320, "height": 520 }, "maximumSize": { "width": 640, "height": 1000 } }]
+}

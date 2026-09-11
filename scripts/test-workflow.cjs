@@ -1,0 +1,26 @@
+const fs=require('fs'),path=require('path'),assert=require('assert');
+const {PNG}=require('../cep/vendor/pngjs');
+const flow=require('../cep/workflow.cjs');
+const root=path.join(__dirname,'../outputs/verification');fs.mkdirSync(root,{recursive:true});
+function png(file,w,h,pixel){const p=new PNG({width:w,height:h});for(let y=0;y<h;y++)for(let x=0;x<w;x++){const c=pixel(x,y),i=(y*w+x)*4;for(let k=0;k<4;k++)p.data[i+k]=c[k];}fs.writeFileSync(path.join(root,file),PNG.sync.write(p));}
+png('baseline.png',64,64,(x,y)=>[x*3,y*3,100,255]);
+png('cutout.png',20,20,(x,y)=>[255,50,0,x>2&&x<17&&y>2&&y<17?255:0]);
+png('original-unit.png',4,4,(x,y)=>[x*30,y*30,100,255]);
+png('mask-unit.png',4,4,(x,y)=>[x===1&&y===1?255:0,0,0,255]);
+png('generated-unit.png',4,4,()=>[255,0,0,255]);
+const verification=flow.protect(path.join(root,'original-unit.png'),path.join(root,'mask-unit.png'),path.join(root,'generated-unit.png'),path.join(root,'protected-unit.png'));
+assert.equal(verification.protectedPixels,15);
+const a=flow.decode(path.join(root,'original-unit.png')),b=flow.decode(path.join(root,'protected-unit.png'));
+for(let i=0;i<16;i++)if(i!==5)assert.deepEqual(b.data.slice(i*4,i*4+4),a.data.slice(i*4,i*4+4));
+assert.throws(()=>flow.protect(path.join(root,'baseline.png'),path.join(root,'mask-unit.png'),path.join(root,'generated-unit.png'),path.join(root,'bad.png')),/尺寸/);
+const materials=[{id:'set1',sku:'GW2000',color:'藕粉',cutout:path.join(root,'cutout.png'),references:[path.join(root,'baseline.png')]}];
+assert.throws(()=>flow.matchMaterial([],materials[0]),/0 个/);
+assert.throws(()=>flow.matchMaterial(materials.concat(materials),materials[0]),/2 个/);
+const m=flow.matchMaterial(materials,materials[0]);
+assert.equal(m.hashes.length,2);
+assert.throws(()=>flow.validateTask({product:materials[0],material:m}),/任务缺少/);
+assert.throws(()=>flow.matchMaterial([{...materials[0],cutout:path.join(root,'baseline.png')}],materials[0]),/透明 PNG/);
+assert.equal(flow.targets([{sku:'GW2000',role:'主推'}],{name:'GW20001',role:'主推'}).length,0);
+assert.equal(flow.targets([{sku:'GW/Y1972',role:'主推'}],{name:'group/GW/Y1972/image',role:'主推'}).length,1);
+fs.writeFileSync(path.join(root,'shoe-materials.json'),JSON.stringify({materials}));
+flow.indexLibrary(root).then(groups=>{assert.equal(groups.length,1);console.log('PASS: exact identity, missing/ambiguous materials, transparency, readiness, region-exterior pixel equality, dimension rejection');}).catch(e=>{console.error(e);process.exitCode=1;});
