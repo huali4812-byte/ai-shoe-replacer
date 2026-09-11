@@ -45,8 +45,8 @@ var AI_Shoe_CEP = (function () {
         report.scanned++;
         try {
           color = label(l); report.labels[color] = (report.labels[color] || 0) + 1;
-          role = ({red:'主推',grain:'次推',green:'次推',violet:'双鞋',indigo:'双鞋'})[color] || (color === 'none' ? inherited : '');
-          if(purple)role='双鞋';
+          role = ({red:'主推',grain:'次推',green:'次推',violet:'双鞋',indigo:'主推'})[color] || (color === 'none' ? inherited : '');
+          if(purple && role !== '主推')role='双鞋';
           b = bounds(l);
         } catch (e) { reason = '读取失败：' + e.message; report.errors.push({layerId:l.id,name:name,error:reason}); }
         if (!reason) {
@@ -213,8 +213,17 @@ var AI_Shoe_CEP = (function () {
         actions.applyPreview({documentId:t.doc.id,layerId:t.layerId,id:a.id,box:box,output:a.output,name:a.name});
         actions.saveCopy({documentId:t.doc.id,output:a.contentFile});
         app.activeDocument=t.parent;documentFor(t.parent.id,true);t.parent.activeLayer=find(t.parent.layers,t.layerId);
+        // Replace an independent parent instance so shared embedded contents cannot
+        // leave the visible layer pointing at a stale/shared object.
+        var originalTarget=find(t.parent.layers,t.layerId);
+        if(!originalTarget)throw Error('回写后找不到目标智能对象');
+        app.activeDocument=t.parent; t.parent.activeLayer=originalTarget;
+        executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);
+        var target=t.parent.activeLayer;
         var desc=new ActionDescriptor();desc.putPath(c('null'),new File(a.contentFile));executeAction(s('placedLayerReplaceContents'),desc,DialogModes.NO);
-        return {layerId:t.layerId};
+        target.visible=true; originalTarget.visible=false; t.parent.activeLayer=target;
+        try { app.refresh(); } catch(ignoreRefresh) {}
+        return {layerId:target.id,originalLayerId:originalTarget.id,visible:target.visible,documentId:t.parent.id,contentFile:a.contentFile};
       }catch(e){app.activeDocument=t.doc;t.doc.activeHistoryState=internalHistory;app.activeDocument=t.parent;t.parent.activeHistoryState=parentHistory;throw e;}finally{app.activeDocument=t.parent;}
     },
     exportMarked:function(a){

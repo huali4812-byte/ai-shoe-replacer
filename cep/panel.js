@@ -103,7 +103,10 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       t.status='已回写，待画面验收';t.written=true;written++;
     }catch(e){t.status='预览已保留，未回写：'+e.message;}render();}
     ready.forEach(t=>{if(t.children)t.written=t.children.every(r=>r.written);});
-    fs.writeFileSync(path.join(dir,'report.json'),JSON.stringify({tasks:ready,regions:exported},null,2));
+    const detectedShoes=exported.reduce((n,t)=>n+(Number(t.shoeCount)||0),0);
+    const writtenShoes=exported.filter(t=>t.written).reduce((n,t)=>n+(Number(t.shoeCount)||0),0);
+    const skippedCandidates=ready.reduce((n,t)=>n+((t.detectionWarnings||[]).length),0);
+    fs.writeFileSync(path.join(dir,'report.json'),JSON.stringify({summary:{parentTasks:ready.length,regions:exported.length,detectedShoes,writtenRegions:written,writtenShoes,skippedCandidates},tasks:ready,regions:exported},null,2));
     if(written){const saved=await host('saveCopy',{documentId:state.scan.documentId});fs.writeFileSync(path.join(dir,'saved-document.json'),JSON.stringify({documentId:state.scan.documentId,document:state.scan.document,saved:saved,time:new Date().toISOString()},null,2));message('回写 '+written+' 张；'+(saved.path||'已取消保存'));}
     else message('生成结果已保留；没有可安全回写的任务。详情：'+path.join(dir,'report.json'));
   });
