@@ -1,6 +1,6 @@
 #target photoshop
 var AI_Shoe_CEP = (function () {
-  var s = stringIDToTypeID, c = charIDToTypeID, working = {}, prepared = {}, protections = {}, smartTasks = {}, regionTasks = {};
+  var s = stringIDToTypeID, c = charIDToTypeID, working = {}, prepared = {}, protections = {}, smartTasks = {}, smartTaskParents = {}, regionTasks = {};
   function smartTask(id){
     if(smartTasks[id])return smartTasks[id];
     var idx=id.lastIndexOf('-r');
@@ -154,6 +154,8 @@ var AI_Shoe_CEP = (function () {
         if(!base||base.kind!==LayerKind.SMARTOBJECT)throw Error('标记层不是智能对象，且没有直接剪贴关联的智能对象底层');l=base;
       }
       if(smartTasks[a.id]){app.activeDocument=smartTasks[a.id].doc;return {documentId:app.activeDocument.id};}
+      var parentKey=String(parent.id)+'/'+String(l.id);
+      if(smartTaskParents[parentKey]){smartTasks[a.id]=smartTaskParents[parentKey];app.activeDocument=smartTasks[a.id].doc;return {documentId:app.activeDocument.id};}
       var ref=new ActionReference();ref.putIdentifier(s('layer'),l.id);var desc=executeActionGet(ref);
       if(desc.hasKey(s('smartObject'))){var so=desc.getObjectValue(s('smartObject'));if(so.hasKey(s('linked'))&&so.getBoolean(s('linked')))throw Error('链接智能对象暂不处理，避免修改外部素材');}
       var openIds={};for(var oi=0;oi<app.documents.length;oi++)openIds[app.documents[oi].id]=true;
@@ -161,7 +163,7 @@ var AI_Shoe_CEP = (function () {
       var source=app.activeDocument;if(source.id===parent.id)throw Error('未打开智能对象内容');
       if(openIds[source.id]&&!source.saved){app.activeDocument=parent;throw Error('智能对象内部有未保存的修改，已保留该文档');}
       var sourceId=source.id;var copy=source.duplicate('AI-Shoe-content-'+a.id,false);if(!openIds[source.id])source.close(SaveOptions.DONOTSAVECHANGES);app.activeDocument=copy;
-      working[copy.id]={sourceId:sourceId};smartTasks[a.id]={doc:copy,parent:parent,layerId:l.id};
+      working[copy.id]={sourceId:sourceId};smartTasks[a.id]={doc:copy,parent:parent,layerId:l.id,parentKey:parentKey};smartTaskParents[parentKey]=smartTasks[a.id];
       return {documentId:copy.id,width:copy.width.as('px'),height:copy.height.as('px')};
     },
     autoPrepareSmart:function(a){
@@ -217,12 +219,14 @@ var AI_Shoe_CEP = (function () {
         // leave the visible layer pointing at a stale/shared object.
         var originalTarget=find(t.parent.layers,t.layerId),target=null;
         if(t.parentTargetId) target=find(t.parent.layers,t.parentTargetId);
+        if(!target && t.parentKey && smartTaskParents[t.parentKey].parentTargetId){target=find(t.parent.layers,smartTaskParents[t.parentKey].parentTargetId);t.parentTargetId=target&&target.id;}
         if(!target){
           if(!originalTarget)throw Error('回写后找不到目标智能对象');
           app.activeDocument=t.parent; t.parent.activeLayer=originalTarget;
           executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);
           target=t.parent.activeLayer; target.visible=true; originalTarget.visible=false;
           t.parentTargetId=target.id;
+          if(t.parentKey && smartTaskParents[t.parentKey]) smartTaskParents[t.parentKey].parentTargetId=target.id;
         }
         var desc=new ActionDescriptor();desc.putPath(c('null'),new File(a.contentFile));executeAction(s('placedLayerReplaceContents'),desc,DialogModes.NO);
         target.visible=true; t.parent.activeLayer=target;
