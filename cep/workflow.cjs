@@ -49,7 +49,9 @@ async function indexLibrary(root, progress, wantedProducts) {
       }
       const diagnostics=[];
       const colorKey=v=>String(v).normalize('NFKC').toLowerCase().trim()
-        .replace(/[／/\\|｜、，,]/g,'-').replace(/[\\s_-]+/g,'-').replace(/^-+|-+$/g,'');
+        .replace(/清新粉|蜜粉|雾粉紫/g,'粉色')
+        .replace(/[／/\\|｜、，,]/g,'-').replace(/[\\s_]+/g,'-')
+        .split('-').map(x=>x.trim()).filter(Boolean).sort().join('-');
       for(const p of wantedProducts){
         const variants=skuVariants(p.sku), items=variants.flatMap(s=>bySku.get(s)||[]);
         const skuHits=items.filter(i=>variants.some(s=>String(i.name||'').split('_')[0].toUpperCase()===s.toUpperCase()));
