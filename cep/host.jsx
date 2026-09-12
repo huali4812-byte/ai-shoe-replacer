@@ -228,6 +228,11 @@ var AI_Shoe_CEP = (function () {
           t.parentTargetId=target.id;
           if(t.parentKey && smartTaskParents[t.parentKey]) smartTaskParents[t.parentKey].parentTargetId=target.id;
         }
+        if(!target)throw Error('回写后找不到可见目标智能对象');
+        // ReplaceContents operates on the active layer. Cached targets are
+        // reused by later regions, so activate the cached copy before calling
+        // the action; otherwise Photoshop replaces the hidden original layer.
+        t.parent.activeLayer=target;
         var desc=new ActionDescriptor();desc.putPath(c('null'),new File(a.contentFile));executeAction(s('placedLayerReplaceContents'),desc,DialogModes.NO);
         target.visible=true; t.parent.activeLayer=target;
         try { app.refresh(); } catch(ignoreRefresh) {}

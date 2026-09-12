@@ -52,18 +52,8 @@ def composite(request):
     size = (box[2]-box[0], box[3]-box[1])
     if mask.size != size:
         raise ValueError('蒙版尺寸与区域不一致，禁止回写')
-    # Providers may ignore the requested aspect ratio and return 3:2/4:3.
-    # Fit the result inside the target square and fill the remaining pixels
-    # from the original crop; this preserves shoe proportions without
-    # stretching and still limits writes to the verified mask.
     if generated.size != size:
-        fitted = Image.new('RGB', size)
-        fitted.paste(source.crop(box), (0, 0))
-        scale = min(size[0]/generated.width, size[1]/generated.height)
-        nw, nh = max(1, round(generated.width*scale)), max(1, round(generated.height*scale))
-        resized = generated.resize((nw, nh), Image.Resampling.LANCZOS)
-        fitted.paste(resized, ((size[0]-nw)//2, (size[1]-nh)//2))
-        generated = fitted
+        raise ValueError(f'生成尺寸 {generated.width}x{generated.height} 与区域 {size[0]}x{size[1]} 不一致，禁止缩放回写')
     original = source.crop(box)
     alpha = np.array(mask)
     outside_mask = alpha == 0
