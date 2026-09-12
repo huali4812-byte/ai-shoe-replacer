@@ -209,8 +209,15 @@ class Vision:
                 continue
             d['segmentationScore'] = confidence
             if d.get('pass') == 'tile':
-                d['skip'] = 'tile_candidate_requires_semantic_verification'
-                continue
+                bw, bh = d['box'][2]-d['box'][0], d['box'][3]-d['box'][1]
+                # Tile-only detections are accepted only when SAM is strong
+                # and the candidate has a shoe-like compact footprint. This
+                # admits the missed rear shoe while continuing to reject the
+                # tall background/arm false positives seen in the same batch.
+                compact = .38 <= (bw / max(bh, 1)) <= 2.4
+                if confidence < .93 or not compact:
+                    d['skip'] = 'tile_candidate_requires_semantic_verification'
+                    continue
             area = (d['box'][2]-d['box'][0])*(d['box'][3]-d['box'][1])
             if confidence < .85 or np.count_nonzero(mask) < max(20,area*.08):
                 d['skip'] = 'segmentation_uncertain'; continue
