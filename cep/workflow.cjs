@@ -19,6 +19,11 @@ function fingerprint(file) { return crypto.createHash('sha256').update(fs.readFi
 function exactSku(text, sku) {
   return new RegExp('(^|[^A-Za-z0-9])' + sku.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '($|[^A-Za-z0-9])','i').test(text);
 }
+function skuVariants(sku) {
+  const s=String(sku).trim();
+  if (/^[A-Z]{2}\/Y\d+$/i.test(s)) { const n=s.slice(3); return ['GW'+n,'GY'+n]; }
+  return [s];
+}
 function targets(products, task) {
   return products.filter(p=>exactSku(task.name,String(p.sku).trim()) && p.role===task.role);
 }
@@ -33,7 +38,7 @@ async function indexLibrary(root, progress, wantedProducts) {
   if (wantedProducts && wantedProducts.length) {
     try {
       const bySku=new Map();
-      for(const sku of new Set(wantedProducts.map(p=>p.sku.trim()))){
+      for(const sku of new Set(wantedProducts.flatMap(p=>skuVariants(p.sku)))){
         const items=await eagleSearch(sku);
         if(!Array.isArray(items))throw Error('Eagle 返回格式无效');
         if(items.length>=200)throw Error(sku+' 查询达到200条上限，不能确认唯一性');
@@ -42,8 +47,8 @@ async function indexLibrary(root, progress, wantedProducts) {
       const diagnostics=[];
       const colorKey=v=>String(v).trim().replace(/[／/]/g,'-');
       for(const p of wantedProducts){
-        const items=bySku.get(p.sku.trim())||[];
-        const hits=items.filter(i=>{const parts=i.name.split('_');return parts[0].toUpperCase()===p.sku.trim().toUpperCase()&&colorKey(parts[1])===colorKey(p.color);});
+        const variants=skuVariants(p.sku), items=variants.flatMap(s=>bySku.get(s)||[]);
+        const hits=items.filter(i=>{const parts=i.name.split('_');return variants.some(s=>parts[0].toUpperCase()===s.toUpperCase())&&colorKey(parts[1])===colorKey(p.color);});
         const cutouts=hits.filter(i=>/_t_side$/i.test(i.name)&&i.ext.toLowerCase()==='png');
         const refs=hits.filter(i=>/_t_(logo|sideright|sole)$/i.test(i.name));
         const file=i=>path.join(root,'images',i.id+'.info',i.name+'.'+i.ext);
