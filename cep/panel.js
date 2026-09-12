@@ -92,16 +92,14 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     }catch(e){t.status='生成失败：'+e.message;}render();}}
     await Promise.all([worker(),worker(),worker(),worker()]);
     let written=0;
-    for(const t of runnable){if(!t.preview||t.written)continue;try{
+    const batches=new Map();
+    for(const t of runnable){if(!t.preview||t.written)continue;const key=t.documentId+'|'+t.layerId;if(!batches.has(key))batches.set(key,[]);batches.get(key).push(t);}
+    for(const group of batches.values()){const t=group[group.length-1];try{
       let patch=t.preview;
-      if(t.visionMask){
-        const composite=path.join(dir,t.id+'-composite.png');
-        await vision.request({action:'composite',source:t.protection.sourceFile,region:{box:t.exportBox,mask:t.visionMask},generated:t.preview,output:composite});
-        patch=composite;
-      }
-      await host('applySmart',{contentFile:path.join(dir,t.id+'-'+Date.now()+'-content.psb'),documentId:t.documentId,layerId:t.layerId,output:patch,box:t.exportBox,id:t.id,name:'[AI-Shoe] '+t.product.sku+' '+t.product.color});
-      t.status='已回写，待画面验收';t.written=true;written++;
-    }catch(e){t.status='预览已保留，未回写：'+e.message;}render();}
+      if(t.visionMask){const composite=path.join(dir,t.id+'-composite.png');await vision.request({action:'composite',source:t.protection.sourceFile,region:{box:t.exportBox,mask:t.visionMask},generated:t.preview,output:composite});patch=composite;}
+      await host('applySmartBatch',{contentFile:path.join(dir,t.id+'-'+Date.now()+'-content.psb'),documentId:t.documentId,layerId:t.layerId,output:patch,box:t.exportBox,id:t.id,name:'[AI-Shoe] '+t.product.sku+' '+t.product.color,regions:group.map(x=>({id:x.id,output:x.preview,box:x.exportBox,name:'[AI-Shoe] '+x.product.sku+' '+x.product.color}))});
+      group.forEach(x=>{x.status='已回写，待画面验收';x.written=true;});written++;
+    }catch(e){group.forEach(x=>x.status='预览已保留，未回写：'+e.message);}render();}
     ready.forEach(t=>{if(t.children)t.written=t.children.every(r=>r.written);});
     const detectedShoes=exported.reduce((n,t)=>n+(Number(t.shoeCount)||0),0);
     const writtenShoes=exported.filter(t=>t.written).reduce((n,t)=>n+(Number(t.shoeCount)||0),0);
