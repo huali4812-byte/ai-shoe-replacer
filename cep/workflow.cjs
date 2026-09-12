@@ -21,7 +21,7 @@ function exactSku(text, sku) {
 }
 function skuVariants(sku) {
   const s=String(sku).trim();
-  if (/^[A-Z]{2}\/Y\d+$/i.test(s)) { const n=s.slice(3); return ['GW'+n,'GY'+n]; }
+  if (/^[A-Z]{2}\/Y\d+$/i.test(s)) { const n=s.slice(4); return ['GW'+n,'GY'+n]; }
   return [s];
 }
 function targets(products, task) {
