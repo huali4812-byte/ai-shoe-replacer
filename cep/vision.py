@@ -79,6 +79,33 @@ def composite(request):
             'modelOutsideChangedFraction': changed_fraction}
 
 
+def compose_parent(request):
+    original = Image.open(request['source']).convert('RGB')
+    canvas = original.copy()
+    union = Image.new('L', original.size, 0)
+    checks = []
+    if not request['regions']:
+        raise ValueError('没有可合成区域')
+    for region in request['regions']:
+        patch_path = region['output']
+        check = composite({'source': request['source'], 'region': region,
+                           'generated': region['generated'], 'output': patch_path})
+        patch = Image.open(patch_path).convert('RGBA')
+        xy = tuple(region['box'][:2])
+        # PIL clips negative/off-canvas coordinates without moving the patch.
+        canvas.paste(patch.convert('RGB'), xy, patch.getchannel('A'))
+        union.paste(255, xy + tuple(region['box'][2:]), patch.getchannel('A'))
+        checks.append(check)
+    outside = np.array(union) == 0
+    changed = np.any(np.array(canvas) != np.array(original), axis=2)
+    if np.any(changed & outside):
+        raise ValueError('完整画布蒙版外像素改变，禁止回写')
+    canvas.save(request['output'])
+    return {'output':request['output'], 'size':list(canvas.size),
+            'regions':checks, 'outsideChangedPixels':0,
+            'changedPixels':int(np.count_nonzero(changed))}
+
+
 class Vision:
     def __init__(self):
         import torch
@@ -233,7 +260,9 @@ def serve():
     for line in source:
         try:
             request = json.loads(line)
-            if request['action'] == 'composite':
+            if request['action'] == 'compose_parent':
+                result = compose_parent(request)
+            elif request['action'] == 'composite':
                 result = composite(request)
             else:
                 if vision is None:

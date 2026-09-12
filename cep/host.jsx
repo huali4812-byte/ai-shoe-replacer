@@ -208,6 +208,8 @@ var AI_Shoe_CEP = (function () {
     applySmart:function(a){
       var t=smartTask(a.id);if(!t)throw Error('内部任务已失效');
       var rt=regionTasks[a.id];var box=rt?rt.box:t.box;if(!box)throw Error('内部任务已失效');
+      if(a.fullCanvas){if(!a.canvasSize||a.canvasSize[0]!==t.doc.width.as('px')||a.canvasSize[1]!==t.doc.height.as('px'))throw Error('完整画布尺寸不一致');box=[0,0,a.canvasSize[0],a.canvasSize[1]];}
+      var previousTargetId=t.parentTargetId;
       app.activeDocument=t.parent;var parentHistory=t.parent.activeHistoryState;
       app.activeDocument=t.doc;var internalHistory=t.doc.activeHistoryState;
       app.activeDocument=t.doc;
@@ -237,7 +239,7 @@ var AI_Shoe_CEP = (function () {
         target.visible=true; t.parent.activeLayer=target;
         try { app.refresh(); } catch(ignoreRefresh) {}
         return {layerId:target.id,originalLayerId:t.layerId,visible:target.visible,documentId:t.parent.id,contentFile:a.contentFile};
-      }catch(e){app.activeDocument=t.doc;t.doc.activeHistoryState=internalHistory;app.activeDocument=t.parent;t.parent.activeHistoryState=parentHistory;throw e;}finally{app.activeDocument=t.parent;}
+      }catch(e){t.parentTargetId=previousTargetId;if(t.parentKey&&smartTaskParents[t.parentKey])smartTaskParents[t.parentKey].parentTargetId=previousTargetId;app.activeDocument=t.doc;t.doc.activeHistoryState=internalHistory;app.activeDocument=t.parent;t.parent.activeHistoryState=parentHistory;throw e;}finally{app.activeDocument=t.parent;}
     },
     exportMarked:function(a){
       var d=documentFor(a.documentId,true),l=find(d.layers,a.layerId),b=bounds(l);

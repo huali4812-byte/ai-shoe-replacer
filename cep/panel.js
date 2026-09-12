@@ -92,16 +92,24 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     }catch(e){t.status='生成失败：'+e.message;}render();}}
     await Promise.all([worker(),worker(),worker(),worker()]);
     let written=0;
-    for(const t of runnable){if(!t.preview||t.written)continue;try{
-      let patch=t.preview;
-      if(t.visionMask){
-        const composite=path.join(dir,t.id+'-composite.png');
-        await vision.request({action:'composite',source:t.protection.sourceFile,region:{box:t.exportBox,mask:t.visionMask},generated:t.preview,output:composite});
-        patch=composite;
-      }
-      await host('applySmart',{contentFile:path.join(dir,t.id+'-'+Date.now()+'-content.psb'),documentId:t.documentId,layerId:t.layerId,output:patch,box:t.exportBox,id:t.id,name:'[AI-Shoe] '+t.product.sku+' '+t.product.color});
-      t.status='已回写，待画面验收';t.written=true;written++;
-    }catch(e){t.status='预览已保留，未回写：'+e.message;}render();}
+    const groups=new Map();
+    for(const t of exported){const key=t.documentId+'/'+t.layerId;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(t);}
+    for(const all of groups.values()){
+      const pending=all.filter(t=>!t.written);if(!pending.length)continue;
+      try{
+        if(all.some(t=>!t.preview||!t.exported))throw Error('同一智能对象仍有区域未生成，保留结果等待补齐');
+        const t=all[0];
+        let output=t.preview,composed=null;
+        if(all.every(x=>x.visionMask)){
+          if(all.some(x=>x.protection.sourceFile!==t.protection.sourceFile))throw Error('同一智能对象的原始画布不一致');
+          composed=await vision.request({action:'compose_parent',source:t.protection.sourceFile,output:path.join(dir,t.id+'-full-composite.png'),regions:all.map(x=>({box:x.exportBox,mask:x.visionMask,generated:x.preview,output:path.join(dir,x.id+'-composite.png')}))});
+          output=composed.output;
+        }else if(all.length!==1)throw Error('多区域任务缺少蒙版，禁止整体覆盖');
+        const result=await host('applySmart',{id:t.id,documentId:t.documentId,layerId:t.layerId,output,contentFile:path.join(dir,t.id+'-'+Date.now()+'-content.psb'),fullCanvas:!!composed,canvasSize:composed&&composed.size,name:'[AI-Shoe] '+t.product.sku+' '+t.product.color});
+        for(const x of pending){x.writeResult=result;x.composition=composed;x.written=true;x.status='已整体回写，待画面验收';written++;}
+      }catch(e){for(const t of pending)t.status='未回写：'+e.message;}
+      render();
+    }
     ready.forEach(t=>{if(t.children)t.written=t.children.every(r=>r.written);});
     const detectedShoes=exported.reduce((n,t)=>n+(Number(t.shoeCount)||0),0);
     const writtenShoes=exported.filter(t=>t.written).reduce((n,t)=>n+(Number(t.shoeCount)||0),0);
