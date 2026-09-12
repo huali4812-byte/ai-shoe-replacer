@@ -53,7 +53,9 @@ def composite(request):
     if mask.size != size:
         raise ValueError('蒙版尺寸与区域不一致，禁止回写')
     if generated.size != size:
-        raise ValueError(f'生成尺寸 {generated.width}x{generated.height} 与区域 {size[0]}x{size[1]} 不一致，禁止缩放回写')
+        if abs((generated.width / generated.height) / (size[0] / size[1]) - 1) > 0.01:
+            raise ValueError(f'生成比例不符：{generated.width}x{generated.height}，区域 {size[0]}x{size[1]}，禁止回写')
+        generated = generated.resize(size, Image.Resampling.LANCZOS)
     original = source.crop(box)
     alpha = np.array(mask)
     outside_mask = alpha == 0
