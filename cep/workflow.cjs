@@ -51,11 +51,12 @@ async function indexLibrary(root, progress, wantedProducts) {
       const colorKey=v=>String(v).normalize('NFKC').toLowerCase().trim()
         .replace(/清新粉|蜜粉|雾粉紫/g,'粉色')
         .replace(/[／/\\|｜、，,]/g,'-').replace(/[\\s_]+/g,'-')
-        .split('-').map(x=>x.trim()).filter(Boolean).sort().join('-');
+        .split('-').map(x=>x.trim()).filter(Boolean);
+      const colorMatch=(a,b)=>{const A=new Set(colorKey(a)),B=new Set(colorKey(b));let n=0;for(const x of A)if(B.has(x))n++;return n>=Math.min(2,A.size,B.size);};
       for(const p of wantedProducts){
         const variants=skuVariants(p.sku), items=variants.flatMap(s=>bySku.get(s)||[]);
         const skuHits=items.filter(i=>variants.some(s=>String(i.name||'').split('_')[0].toUpperCase()===s.toUpperCase()));
-        const hits=skuHits.filter(i=>{const parts=String(i.name||'').split('_');return colorKey(parts[1])===colorKey(p.color);});
+        const hits=skuHits.filter(i=>{const parts=String(i.name||'').split('_');return colorMatch(parts[1],p.color);});
         const cutouts=hits.filter(i=>/_t_side$/i.test(i.name)&&i.ext.toLowerCase()==='png');
         const refs=hits.filter(i=>/_t_(logo|sideright|sole)$/i.test(i.name));
         const file=i=>path.join(root,'images',i.id+'.info',i.name+'.'+i.ext);
