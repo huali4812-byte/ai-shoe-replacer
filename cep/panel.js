@@ -6,8 +6,12 @@
   const state={scan:null,products:[],materials:[],tasks:[],busy:false,targetSku:''};
 const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
   function host(method,args){return new Promise((resolve,reject)=>cs.evalScript('AI_Shoe_CEP.dispatch('+JSON.stringify(method)+','+JSON.stringify(args||{})+')',raw=>{try{const r=JSON.parse(raw);if(!r.ok)throw Error(r.error);resolve(r.data);}catch(e){reject(e);}}));}
+  // Presentation state only; never used to decide generation or writeback.
+  const expandedTaskPaths=new Set();
+  let batchStage='';
+  function showBatchStage(text){batchStage=text;message(text);}
   function message(t){$('message').textContent=t;}
-  async function act(fn){if(state.busy)return;state.busy=true;try{render();await fn();}catch(e){message('操作失败：'+e.message);}finally{state.busy=false;try{render();}catch(e){message('面板刷新失败：'+e.message);}}}
+  async function act(fn,uiLabel){if(state.busy)return;state.busy=true;if(uiLabel)showBatchStage(uiLabel);try{render();await fn();}catch(e){message('操作失败：'+e.message);}finally{state.busy=false;batchStage='';try{render();}catch(e){message('面板刷新失败：'+e.message);}}}
   function button(text,fn,disabled){const b=document.createElement('button');b.textContent=text;b.disabled=state.busy||disabled;b.onclick=()=>act(fn);return b;}
   function rebuild(){
     if(!state.scan)return;
@@ -21,6 +25,8 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
   }
   function matchAll(){state.tasks.forEach(t=>{if(t.region)return;t.material=null;if(!t.product)return;try{t.material=flow.matchMaterial(state.materials,t.product);t.status='待处理';}catch(e){t.status='已跳过：'+e.message;}});}
   function render(){
+    $('batch').disabled=state.busy;
+    $('batch').textContent=batchStage?'正在处理…':state.busy?'请等待当前操作…':'开始批量换鞋';
     ['scan','working','excel','library','apiTest','save','diagnostics','bindMaterial','libraryPath','cutout','referenceFiles','materialProduct'].forEach(id=>$(id).disabled=state.busy);
     const locked=state.tasks.some(t=>t.children||t.written);
     ['targetSku','scan','working','excel','library','libraryPath','bindMaterial'].forEach(id=>$(id).disabled=state.busy||locked);
@@ -29,8 +35,14 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     $('count').textContent=state.tasks.length+' 个鞋位任务';
     state.tasks.forEach(t=>{
       const row=document.createElement('article');row.className='task';
-      const title=document.createElement('strong');title.textContent=t.name+' · '+t.role+' · 鞋位 '+t.slot;row.appendChild(title);
-      const details=document.createElement('p');details.textContent='图层 '+t.layerId+' ｜区域 '+(t.region?t.region.box.join(', '):(t.children?'已确认 '+t.children.length+' 个区域':t.exportBox?t.exportBox.join(', '):'尚未检测'));row.appendChild(details);
+      const fullName=String(t.name||'未命名图层');
+      const shortName=fullName.split('/').filter(Boolean).pop()||fullName;
+      const title=document.createElement('strong');title.textContent=shortName+' · '+t.role;title.title=fullName;row.appendChild(title);
+      const pathDetails=document.createElement('details');pathDetails.className='task-path';pathDetails.open=expandedTaskPaths.has(t.id);
+      const pathSummary=document.createElement('summary');pathSummary.textContent='完整图层路径';pathDetails.appendChild(pathSummary);
+      const pathText=document.createElement('div');pathText.textContent=fullName;pathDetails.appendChild(pathText);
+      pathDetails.ontoggle=()=>{if(pathDetails.open)expandedTaskPaths.add(t.id);else expandedTaskPaths.delete(t.id);};row.appendChild(pathDetails);
+      const details=document.createElement('p');details.textContent='图层 '+t.layerId+' · 鞋位 '+t.slot+' ｜区域 '+(t.region?t.region.box.join(', '):(t.children?'已确认 '+t.children.length+' 个区域':t.exportBox?t.exportBox.join(', '):'尚未检测'));row.appendChild(details);
       const assigned=document.createElement('p');assigned.textContent=t.product?'目标：'+t.product.sku+' | '+t.product.color+' | '+t.product.role:'目标：无唯一对应款色';row.appendChild(assigned);
       const status=document.createElement('p');status.textContent=(t.children?t.children.map((r,i)=>(r.shoeCount>1?'鞋组 ':'鞋部 ')+(i+1)+'：'+r.status).join('；'):t.status)+(t.detectionWarnings&&t.detectionWarnings.length?'；另有 '+t.detectionWarnings.length+' 个检测候选未通过校验，已跳过':'');row.appendChild(status);
       row.appendChild(button('定位图层',async()=>{await host('selectLayer',t);message('已定位图层，等待鞋位选区');},!state.scan.working||!!t.region));
@@ -53,14 +65,14 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     const exported=[];
     for(const t of ready){if(t.children){exported.push(...t.children);continue;}if(t.manualRegion){exported.push(t);continue;}try{
       t.input=path.join(dir,t.id+'.png');
-      t.status='自动进入智能对象并定位鞋部';render();
+      t.status='自动进入智能对象并定位鞋部';showBatchStage('正在定位鞋位 · 图层 '+t.layerId);render();
       t.protection=await host('autoPrepareSmart',{id:t.id,documentId:t.documentId,layerId:t.layerId,diagnostic:path.join(dir,t.id+'-structure.json'),contentFile:path.join(dir,t.id+'-content.psb')});
       if(t.protection.source==='needsVision'){
         // Keep each smart object's masks/crops isolated; the detector uses fixed
         // shoe-0/mask-0 names and concurrent tasks would otherwise overwrite them.
         const visionFolder=path.join(dir,'vision',t.id);
         fs.mkdirSync(visionFolder,{recursive:true});
-        t.status='本地检测与分割鞋部（首次加载模型可能较慢）';render();
+        t.status='本地检测与分割鞋部（首次加载模型可能较慢）';showBatchStage('正在识别鞋部 · 图层 '+t.layerId+'（首次加载模型可能较慢）');render();
         const visionResult=await vision.request({action:'detect',source:t.protection.sourceFile,folder:visionFolder});
         fs.writeFileSync(path.join(visionFolder,'detection.json'),JSON.stringify(visionResult,null,2));
         if(!visionResult.regions||!visionResult.regions.length)throw Error('自动检测未找到鞋部：'+(visionResult.status||'unknown'));
@@ -84,6 +96,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         exported.push(t);
       }
     }catch(e){t.status='导出失败：'+e.message;}render();}
+    showBatchStage('正在准备鞋位图像');
     for(const t of exported){if(t.exported)continue;try{await host('exportSmart',{id:t.id,output:t.input});t.exported=true;}catch(e){t.status='区域导出失败：'+e.message;}render();}
     const runnable=exported.filter(t=>t.exported===true);
     let next=0;
@@ -96,7 +109,9 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       t.status='已生成，待保护回写';
     }catch(e){t.status='生成失败：'+e.message;}render();}}
     // AI 请求最多 7 并发；Photoshop 导出与回写仍保持串行。
+    showBatchStage('正在生成换鞋结果，请稍候');
     await Promise.all([worker(),worker(),worker(),worker(),worker(),worker(),worker()]);
+    showBatchStage('正在验证生成结果并回写工作副本');
     let written=0;
     const groups=new Map();
     for(const t of exported){const key=t.documentId+'/'+t.layerId;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(t);}
@@ -122,9 +137,9 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     const writtenShoes=exported.filter(t=>t.written).reduce((n,t)=>n+(Number(t.shoeCount)||0),0);
     const skippedCandidates=ready.reduce((n,t)=>n+((t.detectionWarnings||[]).length),0);
     fs.writeFileSync(path.join(dir,'report.json'),JSON.stringify({summary:{parentTasks:ready.length,regions:exported.length,detectedShoes,writtenRegions:written,writtenShoes,skippedCandidates},tasks:ready,regions:exported},null,2));
-    if(written){const saved=await host('saveCopy',{documentId:state.scan.documentId});fs.writeFileSync(path.join(dir,'saved-document.json'),JSON.stringify({documentId:state.scan.documentId,document:state.scan.document,saved:saved,time:new Date().toISOString()},null,2));message('回写 '+written+' 张；'+(saved.path||'已取消保存'));}
+    if(written){showBatchStage('回写完成，等待另存 PSB 副本');const saved=await host('saveCopy',{documentId:state.scan.documentId});fs.writeFileSync(path.join(dir,'saved-document.json'),JSON.stringify({documentId:state.scan.documentId,document:state.scan.document,saved:saved,time:new Date().toISOString()},null,2));message('回写 '+written+' 张；'+(saved.path||'已取消保存'));}
     else message('生成结果已保留；没有可安全回写的任务。详情：'+path.join(dir,'report.json'));
-  });
+  },'正在准备批量换鞋…');
   $('targetSku').onchange=()=>{state.targetSku=$('targetSku').value;state.materials=[];rebuild();render();message('已切换新货号，请检索素材；红标主推、绿标次推');};
   async function loadLibrary(){
     if(!state.targetSku)throw Error('请先选择新货号');

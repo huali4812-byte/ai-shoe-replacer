@@ -62,3 +62,12 @@ summary{cursor:pointer;font-size:12px;color:#c3c6ce;line-height:22px}
 /* Old docked panels may keep a narrow saved size until resized. */
 @media(max-width:540px){.control-panel{flex-basis:46%;width:46%}.brand{flex-wrap:wrap;gap:6px}.settings-scroll{padding-left:10px;padding-right:10px}.action-dock{padding:10px}.button-row{display:block}.button-row button{width:100%;margin-top:6px}.task-header{padding:12px}#tasks{padding:8px}.task{padding:10px}.task button{margin-right:0;width:100%}}
 @media(max-height:570px){.brand{padding-top:10px;padding-bottom:10px}.setup-section{padding:12px 0}.action-dock{padding-top:10px;padding-bottom:10px}.status-panel{margin-top:8px;padding:7px 9px}#message{max-height:80px}}
+
+/* Compact task presentation; all task actions remain available. */
+.task{padding:12px;margin-bottom:10px;border-radius:6px}
+.task strong{padding-bottom:6px;line-height:1.5}
+.task p{margin:6px 0}
+.task p:last-of-type{padding:6px 8px}
+.task-path{margin:4px 0 6px}
+.task-path summary{font-size:11px;line-height:20px;color:#aeb0b7}
+.task-path div{font-size:11px;line-height:1.6;color:#bcc0cb;overflow-wrap:break-word;word-break:break-word;padding:5px 0}
