@@ -6,7 +6,7 @@
   const state={scan:null,products:[],materials:[],tasks:[],busy:false,targetSku:'',theme:localStorage.getItem('shoe-theme')==='dark'?'dark':'light'};
   function applyTheme(){document.body.dataset.theme=state.theme;$('themeToggle').textContent=state.theme==='dark'?'☀ 白天':'☾ 夜间';}
 const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
-  function host(method,args){return new Promise((resolve,reject)=>cs.evalScript('AI_Shoe_CEP.dispatch('+JSON.stringify(method)+','+JSON.stringify(args||{})+')',raw=>{try{const r=JSON.parse(raw);if(!r.ok)throw Error(r.error);resolve(r.data);}catch(e){reject(e);}}));}
+  function host(method,args){return new Promise((resolve,reject)=>cs.evalScript('AI_Shoe_CEP.dispatch('+JSON.stringify(method)+','+JSON.stringify(args||{})+')',raw=>{try{if(!raw||!String(raw).trim())throw Error('Photoshop 未返回结果，可能是脚本异常或插件未重载');const r=JSON.parse(raw);if(!r.ok)throw Error(r.error);resolve(r.data);}catch(e){reject(e);}}));}
   // Presentation state only; never used to decide generation or writeback.
   const expandedTaskPaths=new Set();
   let batchStage='';
@@ -102,12 +102,75 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     }});
     matchAll();
   }
+  function displayService(){const req=typeof require==='function'?require:window.cep_node.require;return req(path.join(folder,'product-display.cjs'));}
+  async function prepareDisplay(t){
+    if(!state.targetSku)throw Error('请先选择新货号');
+    const svc=displayService(),materials=await svc.loadMaterials($('libraryPath').value.trim(),state.targetSku);
+    if(t.displayRows){t.displayMaterials=materials;t.status='展示素材已重新读取';render();return;}
+    const inspection=await host('inspectProductDisplay',t);
+    const skuProducts=state.products.filter(p=>p.sku.trim()===state.targetSku);
+    const uniqueProducts=[];const seenProducts=new Set();
+    for(const p of skuProducts){if(!seenProducts.has(p.id)){seenProducts.add(p.id);uniqueProducts.push(p);}}
+    const byDisplayOrder=inspection.rows.length===uniqueProducts.length&&uniqueProducts.length>0;
+    t.displayRows=inspection.rows.map((row,index)=>{
+      const exact=svc.productsForRow(skuProducts,state.targetSku,row);
+      const selected=exact.length===1?exact[0]:(byDisplayOrder?uniqueProducts[index]:null);
+      return {...row,productId:selected?selected.id:'',status:row.error||(selected?(exact.length===1?'已按颜色自动匹配':'已按展示顺序自动绑定目标款色'):'待匹配目标款色')};
+    });
+    t.displayMaterials=materials;
+    t.status='展示行已读取；颜色不匹配的行请选择目标款色';render();
+  }
+  async function applyDisplay(t,dir){
+    if(!t.displayRows||!t.displayMaterials)await prepareDisplay(t);
+    let writes=0;const svc=displayService();
+    for(const row of t.displayRows){if(row.written)continue;try{
+      const product=state.products.find(p=>p.id===row.productId&&p.sku.trim()===state.targetSku);
+      const plan=svc.makePlan(row,product,t.displayMaterials);svc.verifyPlan(plan);
+      row.result=await host('applyProductDisplayRow',{id:t.id,documentId:t.documentId,layerId:t.layerId,plan,contentFile:path.join(dir,t.id+'-row-'+row.id+'-'+Date.now()+'.psb')});
+      row.plan=plan;row.written=true;row.status='三视角已回写，待视觉验收';writes++;
+    }catch(e){row.status='产品展示待确认：'+e.message;}render();}
+    t.written=t.displayRows.length>0&&t.displayRows.every(r=>r.written);
+    t.status=t.written?'产品展示全部展示行已回写，待验收':'产品展示部分未完成，请查看各行原因';
+    try{fs.writeFileSync(path.join(dir,t.id+'-product-display.json'),JSON.stringify(t,null,2));}catch(e){t.status+='；回写记录保存失败：'+e.message;}return writes;
+  }
+  async function applyDisplayAI(t,dir){
+    if(!t.displayRows||!t.displayMaterials)await prepareDisplay(t);
+    let writes=0;const svc=displayService();
+    // Recover tasks created by an older panel version: bind rows by order when
+    // the report has empty productId values but the SKU has one unique product
+    // for each displayed row.
+    const skuProducts=state.products.filter(p=>p.sku.trim()===state.targetSku),ordered=[];
+    const seen=new Set();for(const p of skuProducts)if(!seen.has(p.id)){seen.add(p.id);ordered.push(p);}
+    if(t.displayRows.length===ordered.length&&ordered.length>0){t.displayRows.forEach((row,i)=>{if(!row.productId)row.productId=ordered[i].id;});}
+    for(const row of t.displayRows){
+      if(row.written)continue;
+      try{
+        const product=state.products.find(p=>p.id===row.productId&&p.sku.trim()===state.targetSku);
+        if(!product)throw Error('请为展示行选择明确目标款色');
+        const plan=svc.makePlan(row,product,t.displayMaterials);svc.verifyPlan(plan);
+        for(const slot of plan.slots){
+          const input=path.join(dir,t.id+'-'+row.id+'-'+slot.id+'-input.png');
+          const prepared=await host('prepareProductDisplayAI',{id:t.id,documentId:t.documentId,slotId:slot.id,input});
+          const output=await api.generate(input,[slot.file,slot.alphaFile],
+            '这是产品展示模块中的鞋部智能对象原图。仅把画面中的鞋替换为 '+product.sku+' '+product.color+'，保持原图画布尺寸、构图、鞋的数量、视角、比例、位置、阴影和白色背景不变；不要生成文字、分隔线或其他产品。目标鞋的颜色、鞋底、Logo和结构严格参考第二张目标鞋图。第三张是透明主体参考，仅用于识别鞋轮廓。',
+            {ratio:'1:1'});
+          await host('applyProductDisplayAI',{id:prepared.id,documentId:t.documentId,layerId:slot.id,output,canvasSize:prepared.size,contentFile:path.join(dir,t.id+'-'+row.id+'-'+slot.id+'-content.psb'),name:'[AI-Shoe] 产品展示 '+product.color});
+        }
+        row.written=true;row.status='AI 已回写，待视觉验收';writes++;
+      }catch(e){row.status='产品展示 AI 待确认：'+e.message;}
+      render();
+    }
+    t.written=t.displayRows.length>0&&t.displayRows.every(r=>r.written);
+    t.status=t.written?'产品展示 AI 全部回写，待验收':'产品展示部分未完成，请查看各行原因';
+    try{fs.writeFileSync(path.join(dir,t.id+'-product-display-ai.json'),JSON.stringify(t,null,2));}catch(e){t.status+='；记录保存失败：'+e.message;}
+    return writes;
+  }
   function matchAll(){state.tasks.forEach(t=>{if(t.region)return;t.material=null;if(!t.product)return;try{t.material=flow.matchMaterial(state.materials,t.product);if(t.dualRole){t.roleMaterials={};for(const role of ['主推','次推'])t.roleMaterials[role]=flow.matchMaterial(state.materials,t.roleProducts[role]);}t.status=t.dualRole?'待读取内部主推／次推标注':'待处理';}catch(e){t.material=null;t.status='已跳过：'+e.message;}});}
   function render(){
     $('batch').disabled=state.busy;
     $('batch').textContent=batchStage?'正在处理…':state.busy?'请等待当前操作…':'开始批量换鞋';
     ['scan','working','excel','library','apiTest','save','diagnostics','bindMaterial','libraryPath','cutout','referenceFiles','materialProduct'].forEach(id=>$(id).disabled=state.busy);
-    const locked=state.tasks.some(t=>t.children||t.written);
+    const locked=state.tasks.some(t=>t.children||t.written||t.displayRows);
     ['targetSku','scan','working','excel','library','libraryPath','bindMaterial'].forEach(id=>$(id).disabled=state.busy||locked);
     $('save').disabled=state.busy||!state.scan||!state.scan.working;
     $('tasks').replaceChildren();
@@ -123,6 +186,21 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       const pathSummary=document.createElement('summary');pathSummary.textContent='完整图层路径';pathDetails.appendChild(pathSummary);
       const pathText=document.createElement('div');pathText.textContent=fullName;pathDetails.appendChild(pathText);
       pathDetails.ontoggle=()=>{if(pathDetails.open)expandedTaskPaths.add(t.id);else expandedTaskPaths.delete(t.id);};row.appendChild(pathDetails);
+      if(t.taskType==='product_display'){
+        const info=document.createElement('p');info.textContent=t.status;row.appendChild(info);
+        row.appendChild(button('读取展示行与素材',async()=>{await prepareDisplay(t);message(t.status);},!state.scan.working||t.written));
+        for(const displayRow of t.displayRows||[]){
+          const label=document.createElement('p');label.textContent=displayRow.color+'：'+displayRow.status;row.appendChild(label);
+          const select=document.createElement('select');select.setAttribute('aria-label',displayRow.color+' 目标款色');select.add(new Option('请选择明确对应的目标款色',''));
+          state.products.filter(p=>p.sku.trim()===state.targetSku).forEach(p=>select.add(new Option(p.color,p.id)));
+          select.value=displayRow.productId;select.disabled=state.busy||displayRow.written;select.onchange=()=>{displayRow.productId=select.value;};row.appendChild(select);
+        }
+        row.appendChild(button('AI 替换产品展示',async()=>{
+          const dir=path.join(os.homedir(),'Pictures','AI-Shoe-Preview','display-'+Date.now());fs.mkdirSync(dir,{recursive:true});
+          const count=await applyDisplayAI(t,dir);message('产品展示 AI 回写 '+count+' 行；'+t.status+'。请另存 PSB 副本。');
+        },!state.scan.working||t.written));
+        $('tasks').appendChild(row);return;
+      }
       const details=document.createElement('p');details.textContent='图层 '+t.layerId+' · 鞋位 '+t.slot+' ｜区域 '+(t.region?t.region.box.join(', '):(t.children?'已确认 '+t.children.length+' 个区域':t.exportBox?t.exportBox.join(', '):'尚未检测'));row.appendChild(details);
       const assigned=document.createElement('p');assigned.textContent=t.product?'目标：'+t.product.sku+' | '+(t.dualRole?'主推 '+t.roleProducts['主推'].color+' ／次推 '+t.roleProducts['次推'].color:t.product.color+' | '+t.product.role):'目标：无唯一对应款色';row.appendChild(assigned);
       const status=document.createElement('p');status.textContent=(t.children?t.children.map((r,i)=>(r.shoeCount>1?'鞋组 ':'鞋部 ')+(i+1)+(t.dualRole?' '+r.role:'')+'：'+r.status).join('；'):t.status)+(t.detectionWarnings&&t.detectionWarnings.length?'；另有 '+t.detectionWarnings.length+' 个检测候选未通过校验，已跳过':'');row.appendChild(status);
@@ -152,13 +230,16 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     if(!state.scan)throw Error('请先扫描 PSB 标记');
     if(!state.scan.working){state.scan=await host('createWorking');rebuild();}
     const ready=state.tasks.filter(t=>t.material&&t.product&&!t.written);
-    if(!ready.length)throw Error('没有待生成的已匹配任务');
+    const displays=state.tasks.filter(t=>t.taskType==='product_display'&&!t.written);
+    if(!ready.length&&!displays.length)throw Error('没有待处理的已匹配任务');
     // Window layout is optional; failure must not discard prepared or paid results.
     let comparison;
     try{comparison=await host('arrangeComparison',{documentId:state.scan.documentId});}
     catch(e){comparison={arranged:false,reason:'自动双联垂直未完成：'+e.message};}
     $('doc').textContent=state.scan.document+' ｜工作副本'+(comparison.arranged?' ｜双联垂直':(' ｜'+comparison.reason));
     const dir=path.join(os.homedir(),'Pictures','AI-Shoe-Preview',String(Date.now()));fs.mkdirSync(dir,{recursive:true});
+    let displayWrites=0;
+    for(const t of displays){try{displayWrites+=await applyDisplayAI(t,dir);}catch(e){t.status='产品展示 AI 待确认：'+e.message;}render();}
     fs.mkdirSync(VISION_FOLDER,{recursive:true});
     const exported=[];
     for(const t of ready){if(t.children){exported.push(...t.children);continue;}if(t.manualRegion){exported.push(t);continue;}try{
@@ -214,7 +295,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     showBatchStage('AI 最多 7 并发；Photoshop 串行回写');
     await Promise.all(Array.from({length:concurrency},worker));
     showBatchStage('正在验证生成结果并回写工作副本');
-    let written=0,documentWrites=0;
+    let written=0,documentWrites=displayWrites;
     const groups=new Map();
     for(const t of exported){const key=t.documentId+'/'+t.layerId;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(t);}
     for(const all of groups.values()){
@@ -228,7 +309,9 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         if(complete.every(x=>x.visionMask)){
           if(all.some(x=>x.protection.sourceFile!==t.protection.sourceFile))throw Error('同一智能对象的原始画布不一致');
           composed=await vision.request({action:'compose_parent',source:t.protection.sourceFile,output:path.join(dir,t.id+'-full-composite.png'),allowPartial:true,requireRoles:!!t.dualRole,transparent:!!t.dualRole,
-            // Keep original text layers in place. Conservative bounding protection avoids covering them.
+            // Visible labels stay protected on partial writes; a complete validated
+            // transaction hides the separate layers in applySmart with rollback.
+            finalizeRoleMarkers:!!t.dualRole&&complete.length===all.length&&!hasUnreviewedCandidates(parent),
             protectedMarkers:t.dualRole?(t.protection.roleMarkers||[]):[],
             protectionRegions:all.map(x=>({box:x.exportBox,mask:x.visionMask,role:x.role})),
             regions:complete.map(x=>({id:x.id,role:x.role,written:!!x.written,box:x.exportBox,mask:x.visionMask,generated:x.preview,output:path.join(dir,x.id+'-composite.png')}))});
@@ -251,8 +334,8 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     const detectedShoes=exported.reduce((n,t)=>n+(Number(t.shoeCount)||0),0);
     const writtenShoes=exported.filter(t=>t.written).reduce((n,t)=>n+(Number(t.shoeCount)||0),0);
     const skippedCandidates=ready.reduce((n,t)=>n+((t.detectionWarnings||[]).length),0);
-    fs.writeFileSync(path.join(dir,'report.json'),JSON.stringify({summary:{parentTasks:ready.length,regions:exported.length,detectedShoes,writtenRegions:written,writtenShoes,skippedCandidates},tasks:ready,regions:exported},null,2));
-    if(documentWrites){showBatchStage('回写完成，等待另存 PSB 副本');const saved=await host('saveCopy',{documentId:state.scan.documentId});fs.writeFileSync(path.join(dir,'saved-document.json'),JSON.stringify({documentId:state.scan.documentId,document:state.scan.document,saved:saved,time:new Date().toISOString()},null,2));message('回写 '+written+' 张；'+(saved.path||'已取消保存'));}
+    fs.writeFileSync(path.join(dir,'report.json'),JSON.stringify({summary:{parentTasks:ready.length,regions:exported.length,detectedShoes,writtenRegions:written,writtenShoes,skippedCandidates,displayWrittenRows:displayWrites},tasks:ready,productDisplays:displays,regions:exported},null,2));
+    if(documentWrites){showBatchStage('回写完成，等待另存 PSB 副本');const saved=await host('saveCopy',{documentId:state.scan.documentId});fs.writeFileSync(path.join(dir,'saved-document.json'),JSON.stringify({documentId:state.scan.documentId,document:state.scan.document,saved:saved,time:new Date().toISOString()},null,2));message('鞋位回写 '+written+' 个，产品展示 '+displayWrites+' 行；'+(saved.path||'已取消保存'));}
     else message('生成结果已保留；没有可安全回写的任务。详情：'+path.join(dir,'report.json'));
   },'正在准备批量换鞋…');
   $('themeToggle').onclick=()=>{if(state.busy)return;state.theme=state.theme==='dark'?'light':'dark';localStorage.setItem('shoe-theme',state.theme);applyTheme();message((state.theme==='dark'?'夜间':'白天')+'模式已启用；AI 并发固定为 7，Photoshop 串行回写');};

@@ -65,6 +65,29 @@ def marker_role(box, markers):
     return ordered[0]
 
 
+def assign_shoe_groups(accepted, markers):
+    """Pair nearby shoes at similar image scale before reading role labels.
+
+    This is geometric grouping, not person recognition. Ambiguous groups stop
+    the task instead of assigning a foreground shoe to the background role.
+    """
+    for item in accepted:
+        item['role'] = marker_role(item['bounds'], markers)
+        item['roleGroupBox'] = item['bounds'][:]
+    # Overlapping views of the same person's shoes inherit the role of the
+    # larger, clearer shoe. This keeps a near shoe from stealing the other
+    # person's label merely because its rectangle is closer to that label.
+    for item in sorted(accepted, key=lambda x: -max(x['bounds'][2]-x['bounds'][0], x['bounds'][3]-x['bounds'][1])):
+        a=item['bounds']; aa=max(1,(a[2]-a[0])*(a[3]-a[1]))
+        for other in accepted:
+            if other is item: continue
+            b=other['bounds']; inter=max(0,min(a[2],b[2])-max(a[0],b[0]))*max(0,min(a[3],b[3])-max(a[1],b[1]))
+            ob=max(1,(b[2]-b[0])*(b[3]-b[1]))
+            if inter/ob > .25: other['role']=item['role']; other['roleGroupBox']=item['bounds'][:]
+    if {item['role'] for item in accepted} != {'主推', '次推'}:
+        raise ValueError('未检测到主推和次推两方鞋位，紫色图暂不生成')
+
+
 def composite(request):
     source = Image.open(request['source']).convert('RGB')
     region = request['region']
@@ -170,7 +193,12 @@ def compose_parent(request):
         checks.append(check)
     if not checks:
         return {'output': None, 'size': list(canvas.size), 'regions': [], 'rejected': rejected}
-    for marker in request.get('protectedMarkers', []):
+    # Only a complete, validated transaction may remove the separate text
+    # layers. A partial result must still preserve their visible rectangles.
+    markers_will_hide = bool(request.get('finalizeRoleMarkers') and request.get('requireRoles')
+                             and not rejected and len(checks) == len(protections)
+                             and {r.get('role') for r in checks} == {'主推', '次推'})
+    for marker in ([] if markers_will_hide else request.get('protectedMarkers', [])):
         if union.crop(tuple(round(x) for x in marker['bounds'])).getbbox():
             raise ValueError('鞋部贴片与保留的提示文字相交，禁止覆盖提示文字')
     outside = np.array(union) == 0
@@ -185,7 +213,7 @@ def compose_parent(request):
     canvas.save(request['output'])
     return {'output': request['output'], 'size': list(canvas.size),
             'regions': checks, 'rejected': rejected, 'outsideChangedPixels': 0,
-            'changedPixels': int(np.count_nonzero(changed))}
+            'changedPixels': int(np.count_nonzero(changed)), 'markersWillHide': markers_will_hide}
 
 
 class Vision:
@@ -278,10 +306,10 @@ class Vision:
             return report
         if len(shoes) > 8:
             raise ValueError('检测鞋数超过 8，疑似多模块内容，停止自动替换')
-        # Give SAM expanded context for shoe candidates. Non-shoe boxes stay
-        # unchanged because they are used only to build protected regions.
-        sam_boxes = [safe_box(d['box'], image.size) if 'shoe' in d['label'] else d['box']
-                     for d in detections]
+        # Single-person behavior stays unchanged. For dual-person images use
+        # native-resolution safe crops below; expanding a prompt on a tiny full
+        # canvas can make SAM include the adjacent shoe or miss distant shoes.
+        sam_boxes = [d['box'] for d in detections]
         masks = self.segment(image, sam_boxes)
         protected = np.zeros((image.height, image.width), dtype=bool)
         for d, (mask, confidence) in zip(detections, masks):
@@ -293,45 +321,72 @@ class Vision:
         def original_box(box):
             return [round(box[0] * sx), round(box[1] * sy),
                     round(box[2] * sx), round(box[3] * sy)]
+        dual = bool(request.get('roleMarkers'))
+        protected_full = np.array(Image.fromarray(protected.astype('uint8')*255).resize(original.size, Image.Resampling.NEAREST)) > 0 if dual else None
         accepted = []
         for i, (d, (mask, confidence)) in enumerate(zip(detections, masks)):
             if 'shoe' not in d['label']:
                 continue
-            d['segmentationScore'] = confidence
             d['dino_box'] = original_box(d['box'])
-            d['safe_box'] = original_box(safe_box(d['box'], image.size))
+            d['safe_box'] = safe_box(d['dino_box'], original.size)
+            if dual:
+                context = d['safe_box']
+                b = d['dino_box']
+                local_box = [b[0]-context[0], b[1]-context[1], b[2]-context[0], b[3]-context[1]]
+                local_mask, confidence = self.segment(original.crop(context), [local_box])[0]
+                full_mask = Image.new('L', original.size, 0)
+                full_mask.paste(Image.fromarray(local_mask.astype('uint8')*255), tuple(context[:2]))
+                mask = np.array(full_mask) > 0
+                d['segmentationMode'] = 'native_safe_crop'
+            d['segmentationScore'] = confidence
+            d['sam_score'] = confidence
+            d['mask_area'] = int(np.count_nonzero(mask))
             if d.get('pass') == 'tile':
                 bw, bh = d['box'][2]-d['box'][0], d['box'][3]-d['box'][1]
                 # Tile-only detections are accepted only when SAM is strong
                 # and the candidate has a shoe-like compact footprint. This
                 # admits the missed rear shoe while continuing to reject the
                 # tall background/arm false positives seen in the same batch.
-                compact = .38 <= (bw / max(bh, 1)) <= 2.4
+                compact = .38 <= (bw / max(bh, 1)) <= (4.0 if dual and confidence >= .93 else 2.4)
                 if confidence < .93 or not compact:
                     if not (request.get('roleMarkers') and confidence >= .90 and compact):
                         d['skip'] = 'tile_candidate_requires_semantic_verification'
                         continue
-            area = (d['box'][2]-d['box'][0])*(d['box'][3]-d['box'][1])
+            area_box = d['dino_box'] if dual else d['box']
+            area = (area_box[2]-area_box[0])*(area_box[3]-area_box[1])
             if confidence < .85 or np.count_nonzero(mask) < max(20,area*.08):
                 d['skip'] = 'segmentation_uncertain'; continue
             # Small expansion for shoe shape and contact blending; subtract detected clothing/skin.
             radius = max(1, min(12, round(math.sqrt(area)*.025)))
             expanded = np.array(Image.fromarray(mask.astype('uint8')*255).filter(ImageFilter.MaxFilter(radius*2+1))) > 0
-            protected_overlap = int(np.count_nonzero(expanded & protected))
-            expanded &= ~protected
-            full = np.array(Image.fromarray(expanded.astype('uint8')*255).resize(original.size, Image.Resampling.NEAREST)) > 0
+            protection = protected_full if dual else protected
+            protected_overlap = int(np.count_nonzero(expanded & protection))
+            expanded &= ~protection
+            d['protected_overlap'] = protected_overlap
+            full = expanded if dual else np.array(Image.fromarray(expanded.astype('uint8')*255).resize(original.size, Image.Resampling.NEAREST)) > 0
             if not np.any(full):
                 d['skip'] = 'empty_after_protection'; continue
             ys,xs = np.where(full)
             bounds = [int(xs.min()),int(ys.min()),int(xs.max()+1),int(ys.max()+1)]
-            role = marker_role(bounds, request['roleMarkers']) if request.get('roleMarkers') else None
+            role = None
             d['role'] = role
             accepted.append({'index':i, 'role':role, 'mask':full, 'bounds':bounds,
                              'cropBox':square_box(bounds, original.size),
                              'score':d['score'], 'segmentationScore':confidence,
                              'protectedOverlap':protected_overlap})
-        if request.get('roleMarkers') and {item['role'] for item in accepted} != {'主推', '次推'}:
-            raise ValueError('未检测到主推和次推两方鞋位，紫色图暂不生成')
+        role_error = None
+        if dual:
+            try:
+                assign_shoe_groups(accepted, request['roleMarkers'])
+                for item in accepted:
+                    d = detections[item['index']]
+                    d['role'] = d['assigned_role'] = item['role']
+                    d['roleGroupBox'] = item['roleGroupBox']
+            except ValueError as exc:
+                role_error = str(exc)
+                for item in accepted:
+                    detections[item['index']]['skip'] = 'role_assignment_uncertain'
+                accepted = []
         for group_index, group in enumerate(group_nearby_regions(accepted)):
             full = np.zeros((original.height, original.width), dtype=bool)
             bounds = [original.width, original.height, 0, 0]
@@ -363,6 +418,11 @@ class Vision:
                 draw.text((full_box[0], max(0, full_box[1]-12)), 'skip '+str(index), fill=(255,160,0))
         overlay.thumbnail((1400,1400)); overlay.save(folder/'detection-preview.jpg')
         report['status'] = 'ready' if report['regions'] else 'segmentation_uncertain'
+        if role_error:
+            report['status'] = role_error
+        for d in detections:
+            if 'shoe' in d['label']:
+                d['rejection_reason'] = d.get('skip')
         report['rejected'] = [
             {'index': i, 'dinoBox': d.get('dino_box', d.get('box')), 'safeBox': d.get('safe_box'),
              'samScore': d.get('segmentationScore'), 'rejectionReason': d.get('skip')}
