@@ -55,7 +55,12 @@ def composite(request):
     if generated.size != size:
         if abs((generated.width / generated.height) / (size[0] / size[1]) - 1) > 0.01:
             raise ValueError(f'生成比例不符：{generated.width}x{generated.height}，区域 {size[0]}x{size[1]}，禁止回写')
-        generated = generated.resize(size, Image.Resampling.LANCZOS)
+        # Preserve the model output aspect ratio; never stretch a shoe.
+        scale = min(size[0] / generated.width, size[1] / generated.height)
+        fitted = generated.resize((max(1, round(generated.width * scale)), max(1, round(generated.height * scale))), Image.Resampling.LANCZOS)
+        canvas = Image.new('RGB', size, (0, 0, 0))
+        canvas.paste(fitted, ((size[0] - fitted.width) // 2, (size[1] - fitted.height) // 2))
+        generated = canvas
     original = source.crop(box)
     alpha = np.array(mask)
     outside_mask = alpha == 0
