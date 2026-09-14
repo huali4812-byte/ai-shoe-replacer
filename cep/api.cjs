@@ -27,6 +27,7 @@ function config() {
   base.pathname = base.pathname.replace(/\/$/, '').replace(/\/v1$/, '') + '/v1/';
   return { key: c.api_key, base: base.href, model: 'gemini-3.1-flash-image-preview' };
 }
+const API_TIMEOUT_MS = 300000;
 function request(url, body, headers, timeout, log = ()=>{}) {
   let stage="连接"; log("request_start");
   return new Promise((resolve, reject) => {
@@ -48,7 +49,7 @@ function request(url, body, headers, timeout, log = ()=>{}) {
         resolve(Buffer.concat(parts));
       });
     });
-    const timer = setTimeout(() => req.destroy(new Error('接口超时（'+stage+'，'+(timeout||180000)/1000+'秒）')), timeout || 180000);
+    const timer = setTimeout(() => req.destroy(new Error('接口超时（'+stage+'，'+(timeout||API_TIMEOUT_MS)/1000+'秒）')), timeout || API_TIMEOUT_MS);
     req.on('close', () => clearTimeout(timer));
     req.on('socket',socket=>{log('socket',{reused:!!req.reusedSocket});socket.once('lookup',()=>log('dns'));socket.once('connect',()=>log('tcp'));socket.once('secureConnect',()=>{stage='上传';log('tls');});});
     req.on('finish',()=>{stage='等待响应';log('request_flushed');});
@@ -90,7 +91,7 @@ async function generate(original, references, prompt, options = {}) {
   const headers={'Authorization':'Bearer '+c.key,'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)};
   let response;
   for(let attempt=1;attempt<=3;attempt++){
-    try { log('attempt_start',{attempt}); response=await request(c.base+'chat/completions',payload,headers,180000,log); break; }
+    try { log('attempt_start',{attempt}); response=await request(c.base+'chat/completions',payload,headers,API_TIMEOUT_MS,log); break; }
     catch(e){
       const transient=/ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|socket hang up/i.test(e.message||'');
       log('attempt_failed',{attempt,transient,error:e.message});
