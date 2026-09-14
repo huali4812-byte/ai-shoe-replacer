@@ -31,7 +31,7 @@ def boxes_near(a, b):
 def group_nearby_regions(regions):
     groups = []
     for region in regions:
-        touching = [g for g in groups if any(boxes_near(region['cropBox'], old['cropBox']) for old in g)]
+        touching = [g for g in groups if any(region.get('role') == old.get('role') and boxes_near(region['cropBox'], old['cropBox']) for old in g)]
         if not touching:
             groups.append([region])
             continue
@@ -43,10 +43,30 @@ def group_nearby_regions(regions):
     return groups
 
 
+def marker_role(box, markers):
+    """Use annotation proximity only when the competing role is clearly farther."""
+    cx, cy = (box[0]+box[2])/2, (box[1]+box[3])/2
+    distances = {}
+    for marker in markers:
+        x0, y0, x1, y1 = marker['bounds']
+        # Labels sit beside shoes: vertical alignment is more informative than horizontal distance.
+        distance = math.hypot(max(x0-cx, 0, cx-x1), 2 * max(y0-cy, 0, cy-y1))
+        role = marker['role']
+        distances[role] = min(distance, distances.get(role, float('inf')))
+    if set(distances) != {'主推', '次推'}:
+        raise ValueError('紫色图缺少主推或次推文字标注')
+    ordered = sorted(distances, key=distances.get)
+    if distances[ordered[1]] - distances[ordered[0]] < max(12, distances[ordered[1]] * .2):
+        raise ValueError('鞋位与主次推标注距离相近，请将文字移近对应鞋子后重试')
+    return ordered[0]
+
+
 def composite(request):
     source = Image.open(request['source']).convert('RGB')
     region = request['region']
     mask = Image.open(region['mask']).convert('L')
+    if mask.getbbox() is None:
+        raise ValueError('空蒙版，禁止回写')
     generated = Image.open(request['generated']).convert('RGB')
     box = region['box']
     size = (box[2]-box[0], box[3]-box[1])
@@ -88,31 +108,80 @@ def composite(request):
             'modelOutsideChangedFraction': changed_fraction}
 
 
+def role_ownership(size, regions):
+    """Reject contested expanded pixels, including regions without a preview."""
+    owners = {}
+    for region in regions:
+        role = region.get('role')
+        if role not in ('主推', '次推'):
+            raise ValueError('紫色合成区域缺少明确角色，禁止回写')
+        box = region['box']
+        mask = Image.open(region['mask']).convert('L')
+        if mask.size != (box[2]-box[0], box[3]-box[1]) or mask.getbbox() is None:
+            raise ValueError('角色保护蒙版为空或尺寸不一致')
+        expanded = mask.filter(ImageFilter.MaxFilter(9))
+        full = Image.new('L', size, 0)
+        full.paste(expanded, tuple(box[:2]))
+        occupied = np.array(full) > 0
+        for other, previous in owners.items():
+            if other != role and np.any(occupied & previous):
+                count = int(np.count_nonzero(occupied & previous))
+                raise ValueError(f'跨角色扩展蒙版冲突：{count} 像素归属不明确，禁止整图回写')
+        owners[role] = occupied | owners.get(role, np.zeros_like(occupied))
+
+
 def compose_parent(request):
     original = Image.open(request['source']).convert('RGB')
     canvas = original.copy()
     union = Image.new('L', original.size, 0)
-    checks = []
+    checks, rejected = [], []
     if not request['regions']:
         raise ValueError('没有可合成区域')
+    protections = request.get('protectionRegions', request['regions'])
+    if request.get('requireRoles') or len({r.get('role') for r in protections if r.get('role')}) > 1:
+        keys = {(tuple(r['box']), r['mask'], r.get('role')) for r in protections}
+        if any((tuple(r['box']), r['mask'], r.get('role')) not in keys for r in request['regions']):
+            raise ValueError('合成区域与角色保护清单不一致')
+        role_ownership(original.size, protections)
     for region in request['regions']:
-        patch_path = region['output']
-        check = composite({'source': request['source'], 'region': region,
-                           'generated': region['generated'], 'output': patch_path})
+        try:
+            patch_path = region['output']
+            check = composite({'source': request['source'], 'region': region,
+                               'generated': region['generated'], 'output': patch_path})
+        except (ValueError, OSError) as exc:
+            if region.get('written'):
+                raise ValueError('已写回区域无法复用，停止合成以保留原结果：' + str(exc)) from exc
+            if not request.get('allowPartial'):
+                raise
+            rejected.append({'id': region.get('id'), 'error': str(exc)})
+            continue
+        check.update(id=region.get('id'), role=region.get('role'))
         patch = Image.open(patch_path).convert('RGBA')
         xy = tuple(region['box'][:2])
-        # PIL clips negative/off-canvas coordinates without moving the patch.
         canvas.paste(patch.convert('RGB'), xy, patch.getchannel('A'))
-        union.paste(255, xy + tuple(region['box'][2:]), patch.getchannel('A'))
+        # Union is max(alpha), not alpha composited over alpha.
+        full_alpha = Image.new('L', original.size, 0)
+        full_alpha.paste(patch.getchannel('A'), xy)
+        union = Image.fromarray(np.maximum(np.array(union), np.array(full_alpha)))
         checks.append(check)
+    if not checks:
+        return {'output': None, 'size': list(canvas.size), 'regions': [], 'rejected': rejected}
+    for marker in request.get('protectedMarkers', []):
+        if union.crop(tuple(round(x) for x in marker['bounds'])).getbbox():
+            raise ValueError('鞋部贴片与保留的提示文字相交，禁止覆盖提示文字')
     outside = np.array(union) == 0
     changed = np.any(np.array(canvas) != np.array(original), axis=2)
     if np.any(changed & outside):
         raise ValueError('完整画布蒙版外像素改变，禁止回写')
+    if request.get('transparent'):
+        # canvas is already alpha-composited; use binary support to avoid applying
+        # a soft alpha twice when Photoshop overlays this on the same source.
+        canvas = canvas.convert('RGBA')
+        canvas.putalpha(Image.fromarray((np.array(union) > 0).astype('uint8') * 255))
     canvas.save(request['output'])
-    return {'output':request['output'], 'size':list(canvas.size),
-            'regions':checks, 'outsideChangedPixels':0,
-            'changedPixels':int(np.count_nonzero(changed))}
+    return {'output': request['output'], 'size': list(canvas.size),
+            'regions': checks, 'rejected': rejected, 'outsideChangedPixels': 0,
+            'changedPixels': int(np.count_nonzero(changed))}
 
 
 class Vision:
@@ -239,9 +308,13 @@ class Vision:
                 d['skip'] = 'empty_after_protection'; continue
             ys,xs = np.where(full)
             bounds = [int(xs.min()),int(ys.min()),int(xs.max()+1),int(ys.max()+1)]
-            accepted.append({'index':i, 'mask':full, 'bounds':bounds,
+            role = marker_role(bounds, request['roleMarkers']) if request.get('roleMarkers') else None
+            d['role'] = role
+            accepted.append({'index':i, 'role':role, 'mask':full, 'bounds':bounds,
                              'cropBox':square_box(bounds, original.size),
                              'score':d['score'], 'segmentationScore':confidence})
+        if request.get('roleMarkers') and {item['role'] for item in accepted} != {'主推', '次推'}:
+            raise ValueError('未检测到主推和次推两方鞋位，紫色图暂不生成')
         for group_index, group in enumerate(group_nearby_regions(accepted)):
             full = np.zeros((original.height, original.width), dtype=bool)
             bounds = [original.width, original.height, 0, 0]
@@ -255,12 +328,19 @@ class Vision:
             input_path = folder/('shoe-group-%d.png'%group_index)
             mask_path = folder/('mask-group-%d.png'%group_index)
             crop.save(input_path); mask_image.save(mask_path)
-            report['regions'].append({'index':group_index,'box':box,'input':str(input_path),
+            report['regions'].append({'index':group_index,'role':group[0].get('role'),'box':box,'input':str(input_path),
                                       'mask':str(mask_path),'shoeCount':len(group),
                                       'detectionIndexes':[item['index'] for item in group],
                                       'score':min(item['score'] for item in group),
                                       'segmentationScore':min(item['segmentationScore'] for item in group)})
             overlay.paste(Image.new('RGB',original.size,(255,0,80)),(0,0),Image.fromarray((full*100).astype('uint8')))
+        draw = ImageDraw.Draw(overlay)
+        for index, detection in enumerate(detections):
+            if detection.get('skip'):
+                b = detection['box']
+                full_box = [b[0]*original.width/image.width, b[1]*original.height/image.height, b[2]*original.width/image.width, b[3]*original.height/image.height]
+                draw.rectangle(full_box, outline=(255, 160, 0), width=3)
+                draw.text((full_box[0], max(0, full_box[1]-12)), 'skip '+str(index), fill=(255,160,0))
         overlay.thumbnail((1400,1400)); overlay.save(folder/'detection-preview.jpg')
         report['status'] = 'ready' if report['regions'] else 'segmentation_uncertain'
         report['preview'] = str(folder/'detection-preview.jpg')

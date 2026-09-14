@@ -2,9 +2,9 @@
 var AI_Shoe_CEP = (function () {
   var s = stringIDToTypeID, c = charIDToTypeID, working = {}, prepared = {}, protections = {}, smartTasks = {}, smartTaskParents = {}, regionTasks = {};
   function smartTask(id){
-    if(smartTasks[id])return smartTasks[id];
+    if(smartTasks[id]){if(smartTasks[id].recoveryBlocked)throw Error('上次回滚未完成，任务已锁定；请保留文档并检查后重新建立工作副本');return smartTasks[id];}
     var idx=id.lastIndexOf('-r');
-    if(idx>0){var base=id.slice(0,idx);if(smartTasks[base])return smartTasks[base];}
+    if(idx>0){var base=id.slice(0,idx);if(smartTasks[base]){if(smartTasks[base].recoveryBlocked)throw Error('上次回滚未完成，任务已锁定');return smartTasks[base];}}
     return null;
   }
   function json(v) {
@@ -53,7 +53,6 @@ var AI_Shoe_CEP = (function () {
           if (isGenerated) reason = '生成图层';
           else if (!effectiveVisible) reason = '图层或父组隐藏';
           else if (l.typename === 'LayerSet') reason = '图层组，继续检查子层';
-          else if (role === '双鞋') reason = '紫色双人款暂时跳过';
           else if (l.kind !== LayerKind.SMARTOBJECT) reason = '非智能对象，不自动替换修补层';
           else if (l.kind !== LayerKind.NORMAL && l.kind !== LayerKind.SMARTOBJECT) reason = '非像素层或智能对象';
           else if (!role) reason = '无可用红绿紫标记';
@@ -153,9 +152,9 @@ var AI_Shoe_CEP = (function () {
         if(l.grouped){for(var i=0;i<siblings.length;i++){if(siblings[i].id===l.id){seen=true;continue;}if(seen&&!siblings[i].grouped){base=siblings[i];break;}}}
         if(!base||base.kind!==LayerKind.SMARTOBJECT)throw Error('标记层不是智能对象，且没有直接剪贴关联的智能对象底层');l=base;
       }
-      if(smartTasks[a.id]){app.activeDocument=smartTasks[a.id].doc;return {documentId:app.activeDocument.id};}
+      if(smartTasks[a.id]){if(smartTasks[a.id].recoveryBlocked)throw Error('上次回滚未完成，不能复用内部任务');app.activeDocument=smartTasks[a.id].doc;return {documentId:app.activeDocument.id};}
       var parentKey=String(parent.id)+'/'+String(l.id);
-      if(smartTaskParents[parentKey]){smartTasks[a.id]=smartTaskParents[parentKey];app.activeDocument=smartTasks[a.id].doc;return {documentId:app.activeDocument.id};}
+      if(smartTaskParents[parentKey]){if(smartTaskParents[parentKey].recoveryBlocked)throw Error('上次回滚未完成，不能复用内部任务');smartTasks[a.id]=smartTaskParents[parentKey];app.activeDocument=smartTasks[a.id].doc;return {documentId:app.activeDocument.id};}
       var ref=new ActionReference();ref.putIdentifier(s('layer'),l.id);var desc=executeActionGet(ref);
       if(desc.hasKey(s('smartObject'))){var so=desc.getObjectValue(s('smartObject'));if(so.hasKey(s('linked'))&&so.getBoolean(s('linked')))throw Error('链接智能对象暂不处理，避免修改外部素材');}
       var openIds={};for(var oi=0;oi<app.documents.length;oi++)openIds[app.documents[oi].id]=true;
@@ -175,13 +174,17 @@ var AI_Shoe_CEP = (function () {
         for(var i=0;i<d.channels.length;i++){var ch=d.channels[i];if(ch.kind!==ChannelType.COMPONENT&&/^(鞋位|鞋部|换鞋|shoe)[ _-]*(mask|蒙版|选区)?[ _-]*[0-9]*$/i.test(ch.name))channels.push(ch);}
         var diag={taskId:a.id,smartLayerId:t.layerId,width:d.width.as('px'),height:d.height.as('px'),layers:items,shoeChannels:channels.length};
         var f=new File(a.diagnostic);f.encoding='UTF8';f.open('w');f.write(json(diag));f.close();
+        var markers=[];
+        function collectMarkers(ls){for(var mi=0;mi<ls.length;mi++){var ml=ls[mi];if(!ml.visible)continue;if(ml.typename==='LayerSet'){collectMarkers(ml.layers);continue;}if(ml.kind===LayerKind.TEXT){var text=String(ml.textItem.contents).replace(/\s/g,'');if(/^(主推|次推)(色)?$/.test(text))markers.push({id:ml.id,role:text.indexOf('主推')===0?'主推':'次推',bounds:bounds(ml)});}}}
+        if(a.dualRole){collectMarkers(d.layers);var main=false,secondary=false;for(var mi=0;mi<markers.length;mi++){main=main||markers[mi].role==='主推';secondary=secondary||markers[mi].role==='次推';}if(!main||!secondary)throw Error('紫色图内部需有独立的主推、次推文字图层；不支持已合并到照片中的提示字');t.roleMarkers=markers;}
         var sourceFile=a.contentFile.replace(/\.psb$/i,'-full.png');
-        exportCrop(d,[0,0,d.width.as('px'),d.height.as('px')],sourceFile);
-        if(channels.length===1){
+        try{for(var mi=0;mi<markers.length;mi++)find(d.layers,markers[mi].id).visible=false;exportCrop(d,[0,0,d.width.as('px'),d.height.as('px')],sourceFile);}
+        finally{for(var mi=0;mi<markers.length;mi++)find(d.layers,markers[mi].id).visible=true;}
+        if(channels.length===1&&!a.dualRole){
           d.selection.load(channels[0]);var region=actions.captureSmartProtection({id:a.id,layerId:t.layerId});
           return {box:region.box,smartLayerId:t.layerId,source:'namedChannel',sourceFile:sourceFile,regions:[{box:region.box,mask:null}]};
         }
-        return {source:'needsVision',sourceFile:sourceFile,smartLayerId:t.layerId,documentId:d.id};
+        return {source:'needsVision',sourceFile:sourceFile,smartLayerId:t.layerId,documentId:d.id,roleMarkers:markers};
       }finally{app.activeDocument=parent;}
     },
     applyVisionRegion:function(a){
@@ -228,6 +231,7 @@ var AI_Shoe_CEP = (function () {
       app.activeDocument=t.doc;
       try{
         actions.applyPreview({documentId:t.doc.id,layerId:t.layerId,id:a.id,box:box,output:a.output,name:a.name});
+        if(t.roleMarkers){for(var mi=0;mi<t.roleMarkers.length;mi++){var marker=find(t.doc.layers,t.roleMarkers[mi].id);if(!marker)throw Error('主次推提示图层已变化，请重新准备任务');marker.visible=!a.hideRoleMarkers;}}
         actions.saveCopy({documentId:t.doc.id,output:a.contentFile});
         app.activeDocument=t.parent;documentFor(t.parent.id,true);t.parent.activeLayer=find(t.parent.layers,t.layerId);
         // Replace an independent parent instance so shared embedded contents cannot
@@ -252,7 +256,15 @@ var AI_Shoe_CEP = (function () {
         target.visible=true; t.parent.activeLayer=target;
         try { app.refresh(); } catch(ignoreRefresh) {}
         return {layerId:target.id,originalLayerId:t.layerId,visible:target.visible,documentId:t.parent.id,contentFile:a.contentFile};
-      }catch(e){t.parentTargetId=previousTargetId;if(t.parentKey&&smartTaskParents[t.parentKey])smartTaskParents[t.parentKey].parentTargetId=previousTargetId;app.activeDocument=t.doc;t.doc.activeHistoryState=internalHistory;app.activeDocument=t.parent;t.parent.activeHistoryState=parentHistory;throw e;}finally{app.activeDocument=t.parent;}
+      }catch(e){
+        var rollbackErrors=[];
+        // Always attempt both documents; one failed history restore must not skip the other.
+        try{app.activeDocument=t.doc;t.doc.activeHistoryState=internalHistory;}catch(internalError){rollbackErrors.push('内部：'+internalError.message);}
+        try{app.activeDocument=t.parent;t.parent.activeHistoryState=parentHistory;}catch(parentError){rollbackErrors.push('父文档：'+parentError.message);}
+        t.parentTargetId=previousTargetId;if(t.parentKey&&smartTaskParents[t.parentKey])smartTaskParents[t.parentKey].parentTargetId=previousTargetId;
+        if(rollbackErrors.length){t.recoveryBlocked=true;throw Error(e.message+'；回滚未完成，任务已锁定：'+rollbackErrors.join('；'));}
+        throw e;
+      }finally{try{app.activeDocument=t.parent;}catch(ignoreActivation){}}
     },
     exportMarked:function(a){
       var d=documentFor(a.documentId,true),l=find(d.layers,a.layerId),b=bounds(l);
@@ -265,6 +277,22 @@ var AI_Shoe_CEP = (function () {
       var d = documentFor(); if (working[d.id]) return scan();
       if (d.mode !== DocumentMode.RGB || d.bitsPerChannel !== BitsPerChannelType.EIGHT) throw Error('当前仅支持 RGB 8 位，避免隐式改变文档色彩和位深');
       var copy = d.duplicate('[AI-Shoe] ' + d.name, false); working[copy.id] = {sourceId:d.id}; return scan();
+    },
+    arrangeComparison:function(a){
+      var copy=null,source=null;
+      for(var i=0;i<app.documents.length;i++)if(app.documents[i].id===a.documentId)copy=app.documents[i];
+      if(!copy||!working[copy.id])throw Error('换鞋工作副本已关闭或未登记');
+      var sourceId=working[copy.id].sourceId;
+      try{
+        for(var j=0;j<app.documents.length;j++)if(app.documents[j].id===sourceId)source=app.documents[j];
+        if(!source)return {arranged:false,reason:'原文档已关闭，未自动双联垂直'};
+        // Make the before/after documents the most recently active pair.
+        app.activeDocument=source;
+        app.activeDocument=copy;
+        app.runMenuItem(s('2upVertical'));
+        return {arranged:true,sourceId:source.id,documentId:copy.id};
+      }catch(e){return {arranged:false,reason:'自动双联垂直未完成：'+e.message};}
+      finally{app.activeDocument=copy;}
     },
     selectLayer:function (a) { var d = documentFor(a.documentId,true), l = find(d.layers,a.layerId); if (!l) throw Error('图层不存在，请重新扫描'); d.activeLayer = l; d.selection.deselect(); return {layerId:l.id,bounds:bounds(l)}; },
     prepare:function (a) {
