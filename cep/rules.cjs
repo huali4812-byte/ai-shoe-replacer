@@ -35,7 +35,7 @@ function parseWorkbook(data) {
     if (!sheet) continue;
     // Stored dimensions can include a million formatted-but-empty rows.
     const cells = Object.keys(sheet).filter(k => /^[A-Z]+[0-9]+$/.test(k) && sheet[k].v != null && String(sheet[k].v).trim());
-    const skuHeader = cells.find(k => String(sheet[k].v).trim() === '货号');
+    const skuHeader = cells.find(k => ['货号','下单款号','款号','商品款号'].includes(String(sheet[k].v).replace(/\\s+/g,'').trim()));
     const colorHeader = cells.find(k => String(sheet[k].v).startsWith('色号'));
     if (!skuHeader || !colorHeader) {
       if (skuHeader) warnings.push(`${name} 只有货号，没有色号列，未用于款色匹配`);
