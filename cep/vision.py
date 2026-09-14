@@ -65,7 +65,7 @@ def composite(request):
     # Expand the editable boundary slightly so the replacement shoe is not
     # clipped by the old shoe silhouette (the source shoe mask is only a
     # protection guide, not the new shoe's final outline).
-    expanded_mask = mask.filter(ImageFilter.MaxFilter( nine := 9 ))
+    expanded_mask = mask.filter(ImageFilter.MaxFilter(9))
     alpha = np.array(expanded_mask)
     outside_mask = alpha == 0
     delta = np.abs(np.array(original, dtype=np.float32)-np.array(generated, dtype=np.float32)).mean(axis=2)
@@ -79,7 +79,7 @@ def composite(request):
     patch.save(request['output'])
     original = source.crop(box)
     combined = Image.composite(generated, original, expanded_mask)
-    before, after, alpha = np.array(original), np.array(combined), np.array(mask)
+    before, after, alpha = np.array(original), np.array(combined), np.array(expanded_mask)
     outside = int(np.count_nonzero(np.any(before != after, axis=2) & (alpha == 0)))
     if outside:
         raise ValueError('区域外像素校验失败')

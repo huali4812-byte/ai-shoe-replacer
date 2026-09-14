@@ -30,10 +30,14 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     state.tasks.forEach(t=>{
       const row=document.createElement('article');row.className='task';
       const title=document.createElement('strong');title.textContent=t.name+' · '+t.role+' · 鞋位 '+t.slot;row.appendChild(title);
-      const details=document.createElement('p');details.textContent='图层 '+t.layerId+' ｜区域 '+(t.region?t.region.box.join(', '):'未确认');row.appendChild(details);
+      const details=document.createElement('p');details.textContent='图层 '+t.layerId+' ｜区域 '+(t.region?t.region.box.join(', '):(t.children?'已确认 '+t.children.length+' 个区域':t.exportBox?t.exportBox.join(', '):'尚未检测'));row.appendChild(details);
       const assigned=document.createElement('p');assigned.textContent=t.product?'目标：'+t.product.sku+' | '+t.product.color+' | '+t.product.role:'目标：无唯一对应款色';row.appendChild(assigned);
       const status=document.createElement('p');status.textContent=(t.children?t.children.map((r,i)=>(r.shoeCount>1?'鞋组 ':'鞋部 ')+(i+1)+'：'+r.status).join('；'):t.status)+(t.detectionWarnings&&t.detectionWarnings.length?'；另有 '+t.detectionWarnings.length+' 个检测候选未通过校验，已跳过':'');row.appendChild(status);
       row.appendChild(button('定位图层',async()=>{await host('selectLayer',t);message('已定位图层，等待鞋位选区');},!state.scan.working||!!t.region));
+      if(t.protection&&!t.children&&!t.written){
+        row.appendChild(button('手动选择鞋位',async()=>{await host('openSmartTask',t);message('已打开内部工作副本，请选择鞋及必要阴影，再点击确认手动选区');},!state.scan.working));
+        row.appendChild(button('确认手动选区',async()=>{const manual=await host('captureManualRegion',t);t.protection=manual;t.exportBox=manual.box;t.visionMask=manual.mask;t.input=manual.input;t.exported=true;t.manualRegion=true;t.status='手动区域已确认，可继续批量换鞋';message(t.status);},!state.scan.working));
+      }
       $('tasks').appendChild(row);
     });
   }
@@ -47,7 +51,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     const dir=path.join(os.homedir(),'Pictures','AI-Shoe-Preview',String(Date.now()));fs.mkdirSync(dir,{recursive:true});
     fs.mkdirSync(VISION_FOLDER,{recursive:true});
     const exported=[];
-    for(const t of ready){if(t.children){exported.push(...t.children);continue;}try{
+    for(const t of ready){if(t.children){exported.push(...t.children);continue;}if(t.manualRegion){exported.push(t);continue;}try{
       t.input=path.join(dir,t.id+'.png');
       t.status='自动进入智能对象并定位鞋部';render();
       t.protection=await host('autoPrepareSmart',{id:t.id,documentId:t.documentId,layerId:t.layerId,diagnostic:path.join(dir,t.id+'-structure.json'),contentFile:path.join(dir,t.id+'-content.psb')});
@@ -91,23 +95,25 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       t.preview=await api.generate(t.input,[t.material.cutout].concat(t.material.references),prompt,genOpts);
       t.status='已生成，待保护回写';
     }catch(e){t.status='生成失败：'+e.message;}render();}}
-    await Promise.all([worker(),worker(),worker(),worker()]);
+    // AI 请求最多 7 并发；Photoshop 导出与回写仍保持串行。
+    await Promise.all([worker(),worker(),worker(),worker(),worker(),worker(),worker()]);
     let written=0;
     const groups=new Map();
     for(const t of exported){const key=t.documentId+'/'+t.layerId;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(t);}
     for(const all of groups.values()){
-      const pending=all.filter(t=>!t.written);if(!pending.length)continue;
+      const pending=all.filter(t=>!t.written&&t.preview&&t.exported);if(!pending.length)continue;
       try{
-        if(all.some(t=>!t.preview||!t.exported))throw Error('同一智能对象仍有区域未生成，保留结果等待补齐');
-        const t=all[0];
+        const complete=all.filter(t=>t.preview&&t.exported);
+        if(!complete.length)throw Error('该智能对象暂无已完成区域，保留结果等待补齐');
+        const t=complete[0];
         let output=t.preview,composed=null;
-        if(all.every(x=>x.visionMask)){
+        if(complete.every(x=>x.visionMask)){
           if(all.some(x=>x.protection.sourceFile!==t.protection.sourceFile))throw Error('同一智能对象的原始画布不一致');
-          composed=await vision.request({action:'compose_parent',source:t.protection.sourceFile,output:path.join(dir,t.id+'-full-composite.png'),regions:all.map(x=>({box:x.exportBox,mask:x.visionMask,generated:x.preview,output:path.join(dir,x.id+'-composite.png')}))});
+          composed=await vision.request({action:'compose_parent',source:t.protection.sourceFile,output:path.join(dir,t.id+'-full-composite.png'),regions:complete.map(x=>({box:x.exportBox,mask:x.visionMask,generated:x.preview,output:path.join(dir,x.id+'-composite.png')}))});
           output=composed.output;
         }else if(all.length!==1)throw Error('多区域任务缺少蒙版，禁止整体覆盖');
         const result=await host('applySmart',{id:t.id,documentId:t.documentId,layerId:t.layerId,output,contentFile:path.join(dir,t.id+'-'+Date.now()+'-content.psb'),fullCanvas:!!composed,canvasSize:composed&&composed.size,name:'[AI-Shoe] '+t.product.sku+' '+t.product.color});
-        for(const x of pending){x.writeResult=result;x.composition=composed;x.written=true;x.status='已整体回写，待画面验收';written++;}
+        for(const x of complete.filter(x=>!x.written)){x.writeResult=result;x.composition=composed;x.written=true;x.status='已整体回写，待画面验收';written++;}
       }catch(e){for(const t of pending)t.status='未回写：'+e.message;}
       render();
     }

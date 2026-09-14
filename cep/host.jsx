@@ -194,6 +194,19 @@ var AI_Shoe_CEP = (function () {
       protections[a.id]={documentId:d.id,layerId:a.layerId,box:box,channel:null,maskFile:a.mask||null};
       return {box:box};
     },
+    captureManualRegion:function(a){
+      var t=smartTasks[a.id];if(!t||app.activeDocument.id!==t.doc.id)throw Error('请先打开内部工作副本并选择鞋部');
+      var folder=new Folder(Folder.temp.fsName+'/AI-Shoe-manual-'+a.id);if(!folder.exists)folder.create();
+      var region=actions.captureSmartProtection(a),d=t.doc;
+      var source=folder.fsName+'/source.png',mask=folder.fsName+'/mask.png',input=folder.fsName+'/input.png';
+      app.activeDocument=d;
+      try{
+        exportCrop(d,[0,0,d.width.as('px'),d.height.as('px')],source);
+        exportCrop(d,region.box,input);
+        exportCrop(d,region.box,mask,protections[a.id].channel);
+        return {source:'manual',sourceFile:source,box:region.box,mask:mask,input:input};
+      }finally{app.activeDocument=t.parent;}
+    },
     captureSmartProtection:function(a){
       var t=smartTasks[a.id];if(!t||app.activeDocument.id!==t.doc.id)throw Error('请先进入此任务的智能对象副本');
       var d=t.doc,b;try{b=bounds({bounds:d.selection.bounds});}catch(e){throw Error('请在内部原图选择鞋子和必要阴影');}
