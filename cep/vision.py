@@ -62,7 +62,11 @@ def composite(request):
         canvas.paste(fitted, ((size[0] - fitted.width) // 2, (size[1] - fitted.height) // 2))
         generated = canvas
     original = source.crop(box)
-    alpha = np.array(mask)
+    # Expand the editable boundary slightly so the replacement shoe is not
+    # clipped by the old shoe silhouette (the source shoe mask is only a
+    # protection guide, not the new shoe's final outline).
+    expanded_mask = mask.filter(ImageFilter.MaxFilter( nine := 9 ))
+    alpha = np.array(expanded_mask)
     outside_mask = alpha == 0
     delta = np.abs(np.array(original, dtype=np.float32)-np.array(generated, dtype=np.float32)).mean(axis=2)
     changed_fraction = float(np.mean(delta[outside_mask] > 40)) if np.any(outside_mask) else 0.0
@@ -71,10 +75,10 @@ def composite(request):
     # Do not reject an otherwise valid shoe merely because the model changed
     # the crop background; retain the metric for diagnostics instead.
     patch = generated.convert('RGBA')
-    patch.putalpha(mask)
+    patch.putalpha(expanded_mask)
     patch.save(request['output'])
     original = source.crop(box)
-    combined = Image.composite(generated, original, mask)
+    combined = Image.composite(generated, original, expanded_mask)
     before, after, alpha = np.array(original), np.array(combined), np.array(mask)
     outside = int(np.count_nonzero(np.any(before != after, axis=2) & (alpha == 0)))
     if outside:
