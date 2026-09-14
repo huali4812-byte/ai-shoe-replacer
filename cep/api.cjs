@@ -47,7 +47,7 @@ function request(url, body, headers, timeout, log = ()=>{}) {
         if (res.statusCode < 200 || res.statusCode >= 300) {
           const body=Buffer.concat(parts).toString('utf8').slice(0,2000);
           const unavailable=/model_not_found|No available channel|no available channel/i.test(body);
-          return reject(new Error('接口 HTTP '+res.statusCode+'：'+(body||'服务端未返回正文')+(unavailable?'；当前配置模型不可用，请检查 ~/.kaienapi/config.json 的 model':'')+'；未获得图片'));
+          return reject(Object.assign(new Error('接口 HTTP '+res.statusCode+'：'+(body||'服务端未返回正文')+(unavailable?'；服务端当前没有该模型的可用通道':'')+'；未获得图片'),{gatewayUnavailable:unavailable,statusCode:res.statusCode}));
         }
         resolve(Buffer.concat(parts));
       });
@@ -102,7 +102,7 @@ async function generate(original, references, prompt, options = {}) {
   for(let attempt=1;attempt<=3;attempt++){
     try { log('attempt_start',{attempt}); response=await request(c.base+'chat/completions',payload,headers,API_TIMEOUT_MS,log); break; }
     catch(e){
-      const transient=/ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|socket hang up/i.test(e.message||'');
+      const transient=!!e.gatewayUnavailable || /HTTP 502|HTTP 503|HTTP 504|ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|socket hang up/i.test(e.message||'');
       log('attempt_failed',{attempt,transient,error:e.message});
       if(!transient||attempt===3) throw e;
       await new Promise(resolve=>setTimeout(resolve,1500*attempt));

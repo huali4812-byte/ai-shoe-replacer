@@ -278,20 +278,28 @@ class Vision:
             return report
         if len(shoes) > 8:
             raise ValueError('检测鞋数超过 8，疑似多模块内容，停止自动替换')
-        masks = self.segment(image, [d['box'] for d in detections])
+        # Give SAM expanded context for shoe candidates. Non-shoe boxes stay
+        # unchanged because they are used only to build protected regions.
+        sam_boxes = [safe_box(d['box'], image.size) if 'shoe' in d['label'] else d['box']
+                     for d in detections]
+        masks = self.segment(image, sam_boxes)
         protected = np.zeros((image.height, image.width), dtype=bool)
         for d, (mask, confidence) in zip(detections, masks):
             if 'shoe' not in d['label'] and confidence >= .8:
                 protected |= mask
         folder = Path(request['folder']); folder.mkdir(parents=True, exist_ok=True)
         overlay = original.copy()
+        sx, sy = original.width / image.width, original.height / image.height
+        def original_box(box):
+            return [round(box[0] * sx), round(box[1] * sy),
+                    round(box[2] * sx), round(box[3] * sy)]
         accepted = []
         for i, (d, (mask, confidence)) in enumerate(zip(detections, masks)):
             if 'shoe' not in d['label']:
                 continue
             d['segmentationScore'] = confidence
-            d['dino_box'] = list(map(float, d['box']))
-            d['safe_box'] = safe_box(d['box'], image.size)
+            d['dino_box'] = original_box(d['box'])
+            d['safe_box'] = original_box(safe_box(d['box'], image.size))
             if d.get('pass') == 'tile':
                 bw, bh = d['box'][2]-d['box'][0], d['box'][3]-d['box'][1]
                 # Tile-only detections are accepted only when SAM is strong
@@ -309,6 +317,7 @@ class Vision:
             # Small expansion for shoe shape and contact blending; subtract detected clothing/skin.
             radius = max(1, min(12, round(math.sqrt(area)*.025)))
             expanded = np.array(Image.fromarray(mask.astype('uint8')*255).filter(ImageFilter.MaxFilter(radius*2+1))) > 0
+            protected_overlap = int(np.count_nonzero(expanded & protected))
             expanded &= ~protected
             full = np.array(Image.fromarray(expanded.astype('uint8')*255).resize(original.size, Image.Resampling.NEAREST)) > 0
             if not np.any(full):
@@ -319,7 +328,8 @@ class Vision:
             d['role'] = role
             accepted.append({'index':i, 'role':role, 'mask':full, 'bounds':bounds,
                              'cropBox':square_box(bounds, original.size),
-                             'score':d['score'], 'segmentationScore':confidence})
+                             'score':d['score'], 'segmentationScore':confidence,
+                             'protectedOverlap':protected_overlap})
         if request.get('roleMarkers') and {item['role'] for item in accepted} != {'主推', '次推'}:
             raise ValueError('未检测到主推和次推两方鞋位，紫色图暂不生成')
         for group_index, group in enumerate(group_nearby_regions(accepted)):
@@ -335,7 +345,10 @@ class Vision:
             input_path = folder/('shoe-group-%d.png'%group_index)
             mask_path = folder/('mask-group-%d.png'%group_index)
             crop.save(input_path); mask_image.save(mask_path)
-            report['regions'].append({'index':group_index,'role':group[0].get('role'),'box':box,'input':str(input_path),
+            report['regions'].append({'index':group_index,'role':group[0].get('role'),'box':box,
+                                      'dinoBoxes':[detections[item['index']].get('dino_box') for item in group],
+                                      'safeBoxes':[detections[item['index']].get('safe_box') for item in group],
+                                      'input':str(input_path),
                                       'mask':str(mask_path),'shoeCount':len(group),
                                       'detectionIndexes':[item['index'] for item in group],
                                       'score':min(item['score'] for item in group),
@@ -350,6 +363,11 @@ class Vision:
                 draw.text((full_box[0], max(0, full_box[1]-12)), 'skip '+str(index), fill=(255,160,0))
         overlay.thumbnail((1400,1400)); overlay.save(folder/'detection-preview.jpg')
         report['status'] = 'ready' if report['regions'] else 'segmentation_uncertain'
+        report['rejected'] = [
+            {'index': i, 'dinoBox': d.get('dino_box', d.get('box')), 'safeBox': d.get('safe_box'),
+             'samScore': d.get('segmentationScore'), 'rejectionReason': d.get('skip')}
+            for i, d in enumerate(detections) if d.get('skip')
+        ]
         report['preview'] = str(folder/'detection-preview.jpg')
         return report
 

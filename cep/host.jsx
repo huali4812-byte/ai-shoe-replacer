@@ -40,6 +40,7 @@ var AI_Shoe_CEP = (function () {
     function walk(list, parent, visible, inherited, generated, purple) {
       for (var i = 0; i < list.length; i++) {
         var l = list[i], name = parent + '/' + l.name, color = '', role = '', reason = '', b = null;
+        var productDisplay = /产品展示/.test(String(l.name)) || /产品展示/.test(String(parent));
         var isGenerated = generated || l.name.indexOf('[AI-Shoe]') === 0 || l.name.indexOf('[换鞋测试]') === 0;
         var effectiveVisible = visible && l.visible;
         report.scanned++;
@@ -55,9 +56,10 @@ var AI_Shoe_CEP = (function () {
           else if (l.typename === 'LayerSet') reason = '图层组，继续检查子层';
           else if (l.kind !== LayerKind.SMARTOBJECT) reason = '非智能对象，不自动替换修补层';
           else if (l.kind !== LayerKind.NORMAL && l.kind !== LayerKind.SMARTOBJECT) reason = '非像素层或智能对象';
+          else if (!role && productDisplay && l.kind === LayerKind.SMARTOBJECT) role = '产品展示';
           else if (!role) reason = '无可用红绿紫标记';
           else if (b[2] <= b[0] || b[3] <= b[1]) reason = '空区域';
-          else report.tasks.push({documentId:d.id,layerId:l.id,name:name,role:role,bounds:b,slots:role === '双鞋' ? 2 : 1});
+          else report.tasks.push({documentId:d.id,layerId:l.id,name:name,role:role,bounds:b,slots:role === '双鞋' ? 2 : 1,taskType:role === '产品展示' ? 'product_display' : 'shoe'});
         }
         var kindName = l.typename === 'LayerSet' ? 'GROUP' : l.kind === LayerKind.SMARTOBJECT ? 'SMARTOBJECT' : (l.kind === LayerKind.NORMAL ? 'NORMAL' : String(l.kind));
         report.layers.push({layerId:l.id,name:name,label:color,role:role,kind:kindName,visible:effectiveVisible,bounds:b,reason:reason || '候选鞋位，需确认区域'});
@@ -186,6 +188,21 @@ var AI_Shoe_CEP = (function () {
         }
         return {source:'needsVision',sourceFile:sourceFile,smartLayerId:t.layerId,documentId:d.id,roleMarkers:markers};
       }finally{app.activeDocument=parent;}
+    },
+    inspectProductDisplay:function(a){
+      var t=smartTasks[a.id];if(!t)throw Error('请先准备产品展示智能对象');
+      var d=t.doc,root=find(d.layers,a.rootLayerId)||d.layers[0],rows=[];
+      function walk(list){for(var i=0;i<list.length;i++){var g=list[i];if(g.typename!=='LayerSet')continue;var hasSlot=false,slots={},color='';
+        for(var j=0;j<g.layers.length;j++){var l=g.layers[j],n=String(l.name);if(l.kind===LayerKind.TEXT&&!color)color=String(l.textItem.contents).replace(/\s/g,'');
+          var m=n.match(/^([123])$/);if(m&&l.kind===LayerKind.SMARTOBJECT){slots[m[1]]={id:l.id,name:n,bounds:bounds(l)};hasSlot=true;}
+          if(/^[123].*范围框/.test(n))slots[n.charAt(0)+'Box']=bounds(l);
+        }
+        if(hasSlot&&color)rows.push({id:g.id,name:g.name,color:color,slots:slots,bounds:bounds(g)});
+        walk(g.layers);
+      }}
+      walk(d.layers);rows.sort(function(x,y){return x.bounds[1]-y.bounds[1]});
+      if(!rows.length)throw Error('产品展示智能对象内未找到“颜色文字 + 1/2/3智能对象”展示行');
+      t.productDisplayRows=rows;return {documentId:d.id,rows:rows,width:d.width.as('px'),height:d.height.as('px')};
     },
     applyVisionRegion:function(a){
       var t=smartTask(a.id);if(!t)throw Error('内部任务已失效');
