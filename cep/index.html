@@ -1,10 +1,65 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>AI 换鞋 Demo CEP</title><link rel="stylesheet" href="styles.css"></head>
-<body><main><header><h1>AI 换鞋 Demo</h1><span>PS 2024</span></header><p id="doc">未读取文档</p>
-<section><h2>数据</h2><input id="excel" type="file" accept=".xlsx,.xls,.csv"><p id="fileName">请选择 Excel</p><label>新货号（替换当前模板款）<select id="targetSku"><option value="">请先读取 Excel</option></select></label></section>
-<section><h2>素材库</h2><label>目录<input id="libraryPath" type="text" value="/Volumes/UED资产库/UED资产库.library"></label><button id="library">读取素材库</button><button id="apiTest">测试 API</button></section>
-<details><summary>登记离线素材对应关系</summary><label>Excel 款色<select id="materialProduct"></select></label><label>透明鞋素材<input id="cutout" type="file" accept=".png"></label><label>多角度参考图<input id="referenceFiles" type="file" accept=".png,.jpg,.jpeg" multiple></label><button id="bindMaterial">登记款色素材</button></details>
-<section><h2>任务</h2><button id="scan">扫描标记</button><button id="working">创建工作副本</button><button id="diagnostics">导出扫描诊断</button><button id="batch">开始批量换鞋</button><p id="count">0 个任务</p><p>自动进入智能对象；有明确鞋部蒙版时复用，没有时用本地 DINO+SAM 自动检测鞋部并分割；检测不到时跳过并记录结构诊断。紫色双人款跳过。全部先导出，AI 最多 4 并发，最后串行回写；无保护选区仅保留预览。</p><div id="tasks"></div></section>
-<section><button id="save">另存 PSB 副本</button></section>
-<footer id="message">CEP 面板已加载</footer></main>
-<script src="CSInterface.js"></script><script src="panel.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 换鞋 Demo CEP</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main class="workspace">
+  <aside class="control-panel" aria-label="换鞋设置与操作">
+    <header class="brand"><h1>AI 换鞋</h1><span>PS 2024</span></header>
+    <div class="settings-scroll" tabindex="0" aria-label="设置区域">
+      <section class="setup-section">
+        <h2><span class="step">01</span> 当前文档</h2>
+        <p id="doc">未读取文档</p>
+        <div class="button-row"><button id="scan">扫描标记</button><button id="working">创建工作副本</button></div>
+        <button id="diagnostics" class="quiet-button">导出扫描诊断</button>
+      </section>
+      <section class="setup-section">
+        <h2><span class="step">02</span> 目标款色</h2>
+        <label for="excel">Excel 数据</label>
+        <input id="excel" type="file" accept=".xlsx,.xls,.csv">
+        <p id="fileName" class="field-note">请选择 Excel</p>
+        <label for="targetSku">新货号（替换当前模板款）</label>
+        <select id="targetSku"><option value="">请先读取 Excel</option></select>
+      </section>
+      <section class="setup-section">
+        <h2><span class="step">03</span> 素材库</h2>
+        <label for="libraryPath">素材目录</label>
+        <input id="libraryPath" type="text" value="/Volumes/UED资产库/UED资产库.library">
+        <div class="button-row"><button id="library">读取素材库</button><button id="apiTest">测试 API</button></div>
+      </section>
+      <details class="disclosure">
+        <summary>登记离线素材对应关系</summary>
+        <label for="materialProduct">Excel 款色</label><select id="materialProduct"></select>
+        <label for="cutout">透明鞋素材</label><input id="cutout" type="file" accept=".png">
+        <label for="referenceFiles">多角度参考图</label><input id="referenceFiles" type="file" accept=".png,.jpg,.jpeg" multiple>
+        <button id="bindMaterial">登记款色素材</button>
+      </details>
+      <details class="disclosure">
+        <summary>处理说明</summary>
+        <p>自动进入智能对象，优先复用明确的鞋部蒙版；没有时自动检测并分割鞋部。检测失败会记录原因，符合条件的任务可手动选择鞋位。</p>
+        <p>紫色双人图按智能对象内独立可见的“主推／次推”文字匹配对应款色。全部检测区域完成且无跳过候选时，在工作副本中隐藏提示文字；部分失败时保留提示。</p>
+        <p>先导出鞋位，AI 最多 7 并发生成，再串行回写。无保护选区仅保留预览；部分区域成功可先回写，同一面板会话内可再次批量补齐。</p>
+        <p>结果写入工作副本，原文档保留。请检查款色、姿态、遮挡和边缘后另存 PSB。</p>
+      </details>
+    </div>
+    <footer class="action-dock">
+      <button id="batch" class="primary-button">开始批量换鞋</button>
+      <button id="save">另存 PSB 副本</button>
+      <div class="status-panel">
+        <span class="status-label">当前状态</span>
+        <div id="message" role="status" aria-live="polite" aria-atomic="true" tabindex="0">CEP 面板已加载</div>
+      </div>
+    </footer>
+  </aside>
+  <section class="task-panel" aria-labelledby="task-heading">
+    <header class="task-header"><div><h2 id="task-heading">任务详情</h2><p>查看每个目标的鞋位与处理进度</p></div><p id="count">0 个任务</p></header>
+    <div id="tasks" tabindex="0" aria-label="鞋位任务列表"></div>
+  </section>
+</main>
+<script src="CSInterface.js"></script><script src="panel.js"></script>
+</body>
+</html>
