@@ -79,3 +79,33 @@ summary{cursor:pointer;font-size:12px;color:#c3c6ce;line-height:22px}
 .revision-comparison figure{margin:0;flex:1 1 130px;min-width:0}
 .revision-comparison img{display:block;width:100%;height:auto;max-height:260px;object-fit:contain;background:#202124}
 .revision-comparison figcaption{font-size:11px;color:#bec6d8;margin-bottom:5px}
+.theme-toggle{margin-left:auto;min-height:28px;padding:4px 8px;font-size:11px}
+.task{position:relative;padding-left:34px}
+.task-toggle{position:absolute;left:8px;top:12px;width:22px;min-height:24px;padding:0;border:0;background:transparent;color:#fff;font-size:22px;line-height:20px}
+.task-toggle.warning{color:#f0c34e}.task-toggle.normal{color:#fff}
+.task.collapsed>*:not(.task-toggle):not(strong){display:none}
+.task.collapsed strong{border-bottom:0;padding-bottom:0}
+body[data-theme="light"] .task-toggle.normal{color:#fff}
+body[data-theme="light"]{--bg:#f3f5f8;--panel:#ffffff;--text:#20242b;--muted:#667080;--border:#d8dde6;background:var(--bg);color:var(--text)}
+body[data-theme="light"] .control-panel,body[data-theme="light"] .task-panel{background:var(--panel)}
+body[data-theme="light"] input[type=text],body[data-theme="light"] select{background:#fff;border-color:#c8ced8;color:#20242b}
+body[data-theme="light"] button{background:#e9edf3;border-color:#c7ced9;color:#252a33}
+body[data-theme="light"] .task{background:#f8f9fb;border-color:#d5dbe5}
+/* Final visual polish: stronger hierarchy and consistent controls. */
+.brand{gap:10px;background:linear-gradient(180deg,#303238,#292a2d)}
+.brand h1{letter-spacing:0;font-size:19px}
+.brand span{background:#343944;color:#cbd5ee;border-color:#56627b}
+button{border-radius:7px;transition:transform .12s,background .12s,border-color .12s}
+button:hover:not(:disabled){transform:translateY(-1px)}
+.button-row button{background:#3b414c;border-color:#596579}
+.action-dock{background:#25272b}
+.primary-button{box-shadow:0 3px 10px #1116}
+.task{box-shadow:0 2px 8px #10111433}
+body[data-theme="light"]{color-scheme:light}
+body[data-theme="light"] .brand{background:linear-gradient(180deg,#ffffff,#f4f6fa)}
+body[data-theme="light"] .brand span{background:#eef2f8;color:#52617a;border-color:#c6cfdd}
+body[data-theme="light"] .button-row button{background:#e7edf7;border-color:#b8c5d8;color:#26344a}
+body[data-theme="light"] .action-dock{background:#f0f3f7;border-color:#d0d7e2}
+body[data-theme="light"] .primary-button{background:#4f70b5;border-color:#6687ca;color:#fff}
+body[data-theme="light"] .task strong{color:#28354a}
+body[data-theme="light"] .task p:last-of-type{background:#edf2f8;color:#51627d}

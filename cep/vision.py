@@ -18,6 +18,10 @@ def square_box(box, size, padding=0.16):
     top = math.floor(cy-side/2)
     return [left, top, left+side, top+side]
 
+def safe_box(box, size, xpad=.14, ypad=.18):
+    x0,y0,x1,y1=box; w,h=size; bw=max(1,x1-x0); bh=max(1,y1-y0)
+    return [max(0,int(x0-bw*xpad)),max(0,int(y0-bh*ypad)),min(w,int(x1+bw*xpad)),min(h,int(y1+bh*ypad))]
+
 
 def boxes_near(a, b):
     """Group shoes whose padded crops would show each other."""
@@ -268,7 +272,7 @@ class Vision:
                 if not duplicate:
                     detections.append({'box':box,'score':score,'label':'a shoe','pass':'tile'})
         shoes = [d for d in detections if 'shoe' in d['label']]
-        report = {'source':request['source'], 'size':list(original.size), 'detections':detections, 'regions':[]}
+        report = {'source':request['source'], 'size':list(original.size), 'detections':detections, 'regions':[], 'detector':'grounding-dino-tiny', 'safePadding':{'x':.14,'y':.18}}
         if not shoes:
             report['status'] = 'no_shoe_detected'
             return report
@@ -286,6 +290,8 @@ class Vision:
             if 'shoe' not in d['label']:
                 continue
             d['segmentationScore'] = confidence
+            d['dino_box'] = list(map(float, d['box']))
+            d['safe_box'] = safe_box(d['box'], image.size)
             if d.get('pass') == 'tile':
                 bw, bh = d['box'][2]-d['box'][0], d['box'][3]-d['box'][1]
                 # Tile-only detections are accepted only when SAM is strong
@@ -294,8 +300,9 @@ class Vision:
                 # tall background/arm false positives seen in the same batch.
                 compact = .38 <= (bw / max(bh, 1)) <= 2.4
                 if confidence < .93 or not compact:
-                    d['skip'] = 'tile_candidate_requires_semantic_verification'
-                    continue
+                    if not (request.get('roleMarkers') and confidence >= .90 and compact):
+                        d['skip'] = 'tile_candidate_requires_semantic_verification'
+                        continue
             area = (d['box'][2]-d['box'][0])*(d['box'][3]-d['box'][1])
             if confidence < .85 or np.count_nonzero(mask) < max(20,area*.08):
                 d['skip'] = 'segmentation_uncertain'; continue

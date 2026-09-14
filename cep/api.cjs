@@ -25,6 +25,8 @@ function config() {
   const base = new URL(c.base_url || 'https://kaienapi.com');
   if (base.protocol !== 'https:') throw new Error('API 地址必须使用 HTTPS');
   base.pathname = base.pathname.replace(/\/$/, '').replace(/\/v1$/, '') + '/v1/';
+  // This gateway's image-edit route is explicitly configured for Gemini image
+  // preview. Keep unrelated local CLI model settings from changing this route.
   return { key: c.api_key, base: base.href, model: 'gemini-3.1-flash-image-preview' };
 }
 const API_TIMEOUT_MS = 300000;
@@ -44,7 +46,8 @@ function request(url, body, headers, timeout, log = ()=>{}) {
         log('response_end',{bytes:size});
         if (res.statusCode < 200 || res.statusCode >= 300) {
           const body=Buffer.concat(parts).toString('utf8').slice(0,2000);
-          return reject(new Error('接口 HTTP '+res.statusCode+'：'+(body||'服务端未返回正文')+'；未获得图片，不代表模型不支持生图'));
+          const unavailable=/model_not_found|No available channel|no available channel/i.test(body);
+          return reject(new Error('接口 HTTP '+res.statusCode+'：'+(body||'服务端未返回正文')+(unavailable?'；当前配置模型不可用，请检查 ~/.kaienapi/config.json 的 model':'')+'；未获得图片'));
         }
         resolve(Buffer.concat(parts));
       });
@@ -70,8 +73,14 @@ function download(url, timeout, log = ()=>{}) {
 }
 async function test() {
   const c = config();
-  const result = JSON.parse((await request(c.base + 'models', null, { Authorization: 'Bearer ' + c.key }, 20000)).toString());
-  return { model: c.model, listed: (result.data || []).some(m => m.id === c.model) };
+  try {
+    const result = JSON.parse((await request(c.base + 'models', null, { Authorization: 'Bearer ' + c.key }, 20000)).toString());
+    return { model: c.model, listed: (result.data || []).some(m => m.id === c.model), modelListChecked: true };
+  } catch (e) {
+    // /models is restricted on some gateway accounts; this does not prove that
+    // chat/completions cannot use the configured image model.
+    return { model: c.model, listed: null, modelListChecked: false, diagnostic: e.message };
+  }
 }
 async function generate(original, references, prompt, options = {}) {
   const logDir=path.join(os.homedir(),"Pictures","AI-Shoe-Results","diagnostics");fs.mkdirSync(logDir,{recursive:true});
