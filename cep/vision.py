@@ -240,6 +240,86 @@ class Vision:
             result.append((masks[i, best].numpy().astype(bool), float(output.iou_scores[0, i, best])))
         return result
 
+    def recover_pull_tabs(self, image, shoe_mask):
+        """Find small shoe appendages missed by whole-shoe SAM.
+
+        Work in the native crop, not the downsampled full canvas. A detail must
+        have explicit detector semantics, a compact high-quality mask and be
+        attached to the existing shoe. Large shoe/hand false positives fail.
+        """
+        bounds = shoe_mask.getbbox()
+        if not bounds:
+            return shoe_mask, []
+        reach = max(8, round(max(bounds[2]-bounds[0], bounds[3]-bounds[1])*.10))
+        connected = np.array(shoe_mask.filter(ImageFilter.MaxFilter(reach*2+1))) > 0
+        inputs = self.detector_processor(images=image, text='shoe pull tab. shoe tongue. heel loop. hand. sock.', return_tensors='pt')
+        with self.torch.inference_mode():
+            outputs = self.detector(**inputs)
+        result = self.detector_processor.post_process_grounded_object_detection(
+            outputs, inputs.input_ids, threshold=.20, text_threshold=.20,
+            target_sizes=[(image.height, image.width)])[0]
+        labels = result.get('text_labels', result.get('labels'))
+        boxes, candidates = [], []
+        for box, score, label in zip(result['boxes'].tolist(), result['scores'].tolist(), labels):
+            b = [max(0,round(box[0])),max(0,round(box[1])),min(image.width,round(box[2])),min(image.height,round(box[3]))]
+            area = max(0,b[2]-b[0])*max(0,b[3]-b[1])
+            detail = 'pull tab' in label or 'heel loop' in label or 'shoe tongue' in label
+            if not area or (detail and (min(b[0],b[1],image.width-b[2],image.height-b[3]) < 2 or area > image.width*image.height*.025 or max(b[2]-b[0],b[3]-b[1]) > max(image.size)*.22)):
+                continue
+            if not detail and not ('hand' in label or 'sock' in label):
+                continue
+            boxes.append(b); candidates.append({'box':b,'label':label,'score':score,'detail':detail})
+        if not boxes:
+            return shoe_mask, []
+        masks = self.segment(image, boxes)
+        protected = np.zeros((image.height,image.width), dtype=bool)
+        hands = np.zeros_like(protected)
+        for c,(m,score) in zip(candidates,masks):
+            if not c['detail'] and score >= .85:
+                protected |= m
+                if 'hand' in c['label']:
+                    hands |= m
+        updated = np.array(shoe_mask)>0
+        diagnostics = []
+        for c,(m,score) in zip(candidates,masks):
+            if not c['detail']: continue
+            b=c['box']; allowed=np.zeros_like(m);allowed[b[1]:b[3],b[0]:b[2]]=True
+            m=m & allowed
+            c.update(samScore=score,maskArea=int(m.sum()))
+            if score < .90 or m.sum()<12 or not np.any(m & connected):
+                c['rejectionReason']='detail_uncertain_or_detached'
+            else:
+                # Local hand/sock segmentation is more precise than a broad
+                # full-image protection box; never overwrite those local masks.
+                detail = np.array(Image.fromarray(m.astype('uint8')*255).filter(ImageFilter.MaxFilter(5)))>0
+                detail &= ~protected
+                # A sock mask can swallow the tab lying directly over it.
+                # Recover only the precise, strongly identified tab pixels,
+                # never the safety margin or hand pixels in that overlap.
+                if c['score'] >= .30 and score >= .95:
+                    recovered = m & protected & ~hands
+                    c['recoveredFromSockPixels'] = int(recovered.sum())
+                    detail |= recovered
+                c['addedPixels']=int(np.count_nonzero(detail & ~updated))
+                updated |= detail
+            diagnostics.append(c)
+        return Image.fromarray(updated.astype('uint8')*255), diagnostics
+
+    def refine_region(self, request):
+        image=Image.open(request['input']).convert('RGB')
+        mask=Image.open(request['mask']).convert('L')
+        if mask.size != image.size:
+            raise ValueError('细节补检输入与蒙版尺寸不一致')
+        diagnostics=[]
+        for b in request.get('shoeBoxes', [list(mask.getbbox() or (0,0,*image.size))]):
+            context=safe_box(b,image.size,xpad=.20,ypad=.30)
+            part,details=self.recover_pull_tabs(image.crop(context),mask.crop(context))
+            mask.paste(part,tuple(context[:2]))
+            for detail in details: detail['contextBox']=context
+            diagnostics.extend(details)
+        mask.save(request['output'])
+        return {'mask':request['output'],'pullTabRecovery':diagnostics}
+
     def detect(self, request):
         original = Image.open(request['source']).convert('RGB')
         if original.width*original.height > 80_000_000:
@@ -397,10 +477,21 @@ class Vision:
             box = square_box(bounds, original.size)
             mask_image = Image.fromarray(full.astype('uint8')*255).crop(box)
             crop = original.crop(box)
+            detail_diagnostics = []
+            for item in group:
+                b = detections[item['index']]['dino_box']
+                local = [b[0]-box[0],b[1]-box[1],b[2]-box[0],b[3]-box[1]]
+                context = safe_box(local, crop.size, xpad=.20, ypad=.30)
+                refined, details = self.recover_pull_tabs(crop.crop(context), mask_image.crop(context))
+                mask_image.paste(refined, tuple(context[:2]))
+                for detail in details:
+                    detail['contextBox'] = context
+                detail_diagnostics.extend(details)
             input_path = folder/('shoe-group-%d.png'%group_index)
             mask_path = folder/('mask-group-%d.png'%group_index)
             crop.save(input_path); mask_image.save(mask_path)
             report['regions'].append({'index':group_index,'role':group[0].get('role'),'box':box,
+                                      'pullTabRecovery':detail_diagnostics,
                                       'dinoBoxes':[detections[item['index']].get('dino_box') for item in group],
                                       'safeBoxes':[detections[item['index']].get('safe_box') for item in group],
                                       'input':str(input_path),
@@ -448,7 +539,8 @@ def serve():
             else:
                 if vision is None:
                     vision = Vision()
-                result = {'ready':True} if request['action'] == 'warmup' else vision.detect(request)
+                result = ({'ready':True} if request['action'] == 'warmup' else
+                          vision.refine_region(request) if request['action'] == 'refine_region' else vision.detect(request))
             print(json.dumps({'ok':True,'data':result},ensure_ascii=False),flush=True)
         except Exception as exc:
             print(json.dumps({'ok':False,'error':str(exc)},ensure_ascii=False),flush=True)

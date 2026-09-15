@@ -43,8 +43,8 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       wrap.appendChild(button('准备新版本…',async()=>{
         if(form.reason==='鞋位或角色识别错误'){message('请先检查鞋位与主次推标记，可使用本地复检入口。当前结果保留；不自动改角色或调用生成。');return;}
         const local=form.reason==='返回图正常，仅重新合成';
-        if(!window.confirm((local?'仅复用当前生成图重新合成，不调用AI；不会自动修正错误蒙版。':'为'+r.role+'区域 '+(index+1)+'（'+(r.shoeCount||1)+' 只鞋）生成一个新版本，可能产生费用。')+'当前结果不会覆盖，生成后需点击应用。是否继续？'))return;
-        message(local?'正在本地重新合成…':'正在生成候选版本，当前结果保留…');
+        if(!window.confirm((local?'复用当前生成图，先本地补检提拉环蒙版再重新合成，不调用生图接口。':'为'+r.role+'区域 '+(index+1)+'（'+(r.shoeCount||1)+' 只鞋）生成一个新版本，可能产生费用。')+'当前结果不会覆盖，生成后需点击应用。是否继续？'))return;
+        message(local?'正在本地补检提拉环并重新合成…':'正在生成候选版本，当前结果保留…');
         await revisionService().generate(parent,r,{reason:form.reason,note:form.note,local});message('新版本已准备好，请对比后选择应用或保留当前版本。');
       },false));
     }
