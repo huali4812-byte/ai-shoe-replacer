@@ -1,0 +1,32 @@
+const assert=require('assert'),fs=require('fs'),os=require('os'),path=require('path'),vm=require('vm');
+const svc=require('../cep/product-display.cjs'),{PNG}=require('../cep/vendor/pngjs');
+const dir=fs.mkdtempSync(path.join(os.tmpdir(),'display-test-'));
+const image=new PNG({width:100,height:100});image.data.fill(0);
+for(let y=20;y<80;y++)for(let x=10;x<90;x++){const i=(y*100+x)*4;image.data[i]=200;image.data[i+3]=255;}
+const t=path.join(dir,'t.png'),bd=path.join(dir,'bd.png');fs.writeFileSync(t,PNG.sync.write(image));image.data.forEach((v,i)=>{if(i%4===3)image.data[i]=255;});fs.writeFileSync(bd,PNG.sync.write(image));
+const product={id:'p',sku:'GW2003',color:'亮银/矿石灰/陨石灰'},entries=[];
+for(const view of ['pair','back','sole'])for(const kind of ['bd','t'])entries.push({view,kind,color:'亮银-矿石灰-陨石灰',file:kind==='t'?t:bd});
+const row={id:1,color:product.color,slots:['pair','back','sole'].map((view,i)=>({id:i+2,view,targetBox:[0,0,40,30]}))};
+const plan=svc.makePlan(row,product,entries);assert.equal(plan.slots.length,3);assert.deepEqual(plan.slots[0].fraction,[.1,.2,.9,.8]);svc.verifyPlan(plan);
+assert.equal(svc.productsForRow([product],product.sku,row).length,1);
+assert.equal(svc.productsForRow([product],product.sku,{color:'亮银/矿石灰/另一色'}).length,0);
+assert.throws(()=>svc.makePlan(row,product,entries.slice(1)),/必须唯一/);
+assert.throws(()=>svc.makePlan(row,product,[...entries,entries[0]]),/必须唯一/);
+assert.throws(()=>svc.makePlan({...row,slots:[{view:'pair',targetBox:[0,0,1000,1000]}]},product,entries),/像素不足/);
+assert.throws(()=>svc.makePlan(row,null,entries),/颜色未明确/);
+const host=fs.readFileSync(path.join(__dirname,'../cep/host.jsx'),'utf8');new vm.Script(host.replace(/^#target.*$/mg,''));
+const inspectText=host.slice(host.indexOf('inspectProductDisplay:function(a){')+'inspectProductDisplay:'.length,host.indexOf('    prepareProductDisplayAI:')).trim().replace(/,$/,'');
+const so=(id,name)=>({id,name,kind:'smart',visible:true,bounds:[0,0,40,30]});
+const group={id:9,name:'展示行',visible:true,typename:'LayerSet',bounds:[0,0,100,100],layers:[{id:1,name:'色名',kind:'text',visible:true,textItem:{contents:product.color}},...['1','2','3'].map((n,i)=>so(i+2,n)),...['1','2','3'].map((n,i)=>({id:i+5,name:n+'范围框',bounds:[0,0,40,30],visible:false}))]};
+const parent={id:20},task={doc:{id:21,layers:[group],width:{as:()=>100},height:{as:()=>100}}};
+const ctx={find:()=>null,documentFor:()=>parent,actions:{openSmartTask(){}},smartTask:()=>task,app:{},LayerKind:{SMARTOBJECT:'smart',TEXT:'text'},bounds:l=>l.bounds};
+const inspect=vm.runInNewContext('('+inspectText+')',ctx);
+let r=inspect({});assert.equal(r.rows.length,1);assert.equal(r.rows[0].error,'');assert.equal(r.rows[0].slots[0].view,'pair');assert.equal(ctx.app.activeDocument,parent);
+group.layers.push({...group.layers[0],id:88});assert.match(inspect({}).rows[0].error,/颜色标题必须唯一/);group.layers.pop();
+group.layers.pop();assert.equal(inspect({}).rows[0].slots[2].fitMode,'existing_canvas');
+assert.throws(()=>svc.makePlan({...row,slots:[row.slots[0],row.slots[0],row.slots[2]]},product,entries),/重复/);
+const canvas=svc.makePlan({...row,slots:row.slots.map(s=>({...s,fitMode:'existing_canvas'}))},product,entries);assert.deepEqual(canvas.slots[0].fraction,[0,0,1,1]);
+fs.appendFileSync(t,'changed');assert.throws(()=>svc.verifyPlan(plan),/发生变化/);
+console.log('PASS: strict colors, complete unique views, alpha geometry, resolution, stale files, internal row inspection and restoration');
+
+fs.rmSync(dir,{recursive:true,force:true});

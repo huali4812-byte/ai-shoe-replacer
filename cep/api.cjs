@@ -7,7 +7,7 @@ const { PNG } = require('./vendor/pngjs');
 const jpeg = require('./vendor/jpeg-js');
 function prepareImage(file) {
   const raw=fs.readFileSync(file); if(raw.length<8)return raw;
-  try { const p=PNG.sync.read(raw); const max=1536, scale=Math.min(1,max/Math.max(p.width,p.height));
+  try { const p=PNG.sync.read(raw); const max=1024, scale=Math.min(1,max/Math.max(p.width,p.height));
     if(scale===1 && raw.length<=6*1024*1024)return raw;
     const w=Math.max(1,Math.round(p.width*scale)),h=Math.max(1,Math.round(p.height*scale));
     const data=Buffer.alloc(w*h*4); for(let y=0;y<h;y++){const sy=Math.min(p.height-1,Math.floor(y/scale));for(let x=0;x<w;x++){const sx=Math.min(p.width-1,Math.floor(x/scale));const a=(sy*p.width+sx)*4,b=(y*w+x)*4;data[b]=p.data[a];data[b+1]=p.data[a+1];data[b+2]=p.data[a+2];data[b+3]=255;}}

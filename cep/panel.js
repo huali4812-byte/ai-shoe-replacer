@@ -154,17 +154,27 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       try{
         const product=state.products.find(p=>p.id===row.productId&&p.sku.trim()===state.targetSku);
         if(!product)throw Error('请为展示行选择明确目标款色');
-        const plan=svc.makePlan(row,product,t.displayMaterials);svc.verifyPlan(plan);
+        row.phase='prepare_references';
+        const plan=await svc.prepareAIPlan(row,product,t.displayMaterials,path.join(dir,'display-references'));svc.verifyPlan(plan);
+        row.slotResults=row.slotResults||{};
         for(const slot of plan.slots){
+          const saved=row.slotResults[slot.id]||{};
+          if(saved.written)continue;
+          row.phase='export_slot';
           const input=path.join(dir,t.id+'-'+row.id+'-'+slot.id+'-input.png');
           const prepared=await host('prepareProductDisplayAI',{id:t.id,documentId:t.documentId,slotId:slot.id,input});
-          const output=await api.generate(input,[slot.file,slot.alphaFile],
+          row.phase='generate';
+          const output=saved.output||await api.generate(input,[slot.file,slot.alphaFile],
             '这是产品展示模块中的鞋部智能对象原图。仅把画面中的鞋替换为 '+product.sku+' '+product.color+'，保持原图画布尺寸、构图、鞋的数量、视角、比例、位置、阴影和白色背景不变；不要生成文字、分隔线或其他产品。目标鞋的颜色、鞋底、Logo和结构严格参考第二张目标鞋图。第三张是透明主体参考，仅用于识别鞋轮廓。',
-            {ratio:'1:1'});
+            {taskId:prepared.id});
+          row.slotResults[slot.id]={output,prepared};
+          fs.writeFileSync(path.join(dir,t.id+'-product-display-ai.json'),JSON.stringify(t,null,2));
+          row.phase='write_slot';
           await host('applyProductDisplayAI',{id:prepared.id,documentId:t.documentId,layerId:slot.id,output,canvasSize:prepared.size,contentFile:path.join(dir,t.id+'-'+row.id+'-'+slot.id+'-content.psb'),name:'[AI-Shoe] 产品展示 '+product.color});
+          row.slotResults[slot.id].written=true;
         }
         row.written=true;row.status='AI 已回写，待视觉验收';writes++;
-      }catch(e){row.status='产品展示 AI 待确认：'+e.message;}
+      }catch(e){row.failure={phase:row.phase,message:e.message,stack:e.stack};row.status='产品展示 '+row.phase+' 失败：'+e.message;}
       render();
     }
     t.written=t.displayRows.length>0&&t.displayRows.every(r=>r.written);

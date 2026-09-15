@@ -167,4 +167,4 @@ function registerMaterial(root, product, cutout, references) {
   index.materials.push(m);fs.writeFileSync(filename,JSON.stringify(index,null,2));
   return filename;
 }
-module.exports={readExcel,targets,indexLibrary,matchMaterial,validateTask,protect,decode,fingerprint,writeReport,registerMaterial};
+module.exports={readExcel,targets,indexLibrary,matchMaterial,validateTask,protect,decode,fingerprint,writeReport,registerMaterial,eagleSearch,skuVariants};

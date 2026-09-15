@@ -35,6 +35,14 @@ var AI_Shoe_CEP = (function () {
     if (!desc.hasKey(s('color'))) throw Error('图层描述符没有 color 字段');
     return typeIDToStringID(desc.getEnumerationValue(s('color')));
   }
+  function isVectorSmart(layer) {
+    if (!layer || layer.kind !== LayerKind.SMARTOBJECT) return false;
+    try {
+      var ref=new ActionReference();ref.putIdentifier(s('layer'),layer.id);var d=executeActionGet(ref);
+      if(d.hasKey(s('smartObject'))){var so=d.getObjectValue(s('smartObject'));if(so.hasKey(s('fileReference'))){var f='';try{f=so.getString(s('fileReference'));}catch(pathType){f=String(so.getPath(s('fileReference')));}if(/\.(ai|pdf|eps|svg)(?:$|\?)/i.test(f))return true;}}
+      return /矢量智能对象|\.ai$/i.test(String(layer.name));
+    } catch(e) { return /矢量智能对象|\.ai$/i.test(String(layer.name)); }
+  }
   function scan() {
     var d = documentFor(), report = { documentId:d.id, document:d.name, width:d.width.as('px'), height:d.height.as('px'), working:!!working[d.id], scanned:0, labels:{}, layers:[], tasks:[], smartObjects:[], errors:[] };
     function walk(list, parent, visible, inherited, generated, purple) {
@@ -43,7 +51,7 @@ var AI_Shoe_CEP = (function () {
         var productDisplay = /产品展示/.test(String(l.name)) || /产品展示/.test(String(parent));
         var isGenerated = generated || l.name.indexOf('[AI-Shoe]') === 0 || l.name.indexOf('[换鞋测试]') === 0;
         var effectiveVisible = visible && l.visible;
-        var vectorLayer=(/矢量智能对象|\.ai$/i.test(String(l.name)));
+        var vectorLayer=isVectorSmart(l);
         if(vectorLayer){report.layers.push({layerId:l.id,name:name,kind:'VECTOR',visible:effectiveVisible,reason:'矢量智能对象，跳过自动处理'});continue;}
         if(productDisplay&&effectiveVisible&&!isGenerated&&l.typename==='LayerSet'){
           var rowViews={},rowCount=0;
@@ -64,7 +72,7 @@ var AI_Shoe_CEP = (function () {
           else if (l.kind !== LayerKind.SMARTOBJECT) reason = '非智能对象，不自动替换修补层';
           else if (l.kind !== LayerKind.NORMAL && l.kind !== LayerKind.SMARTOBJECT) reason = '非像素层或智能对象';
           else {
-            var displayCandidate=productDisplay||(!role&&b[1]>=report.height*.7);
+            var displayCandidate=productDisplay;
             if(displayCandidate)role='产品展示';
             if(!role)reason='无可用红绿紫标记';
             else if(b[2]<=b[0]||b[3]<=b[1])reason='空区域';
@@ -232,27 +240,53 @@ var AI_Shoe_CEP = (function () {
     prepareProductDisplayAI:function(a){
       var parent=documentFor(a.documentId,true),slot=find(parent.layers,a.slotId);
       if(!slot||slot.kind!==LayerKind.SMARTOBJECT)throw Error('产品展示槽位不是智能对象');
-      if(/矢量智能对象|\.ai$/i.test(String(slot.name)))throw Error('矢量智能对象不支持自动换鞋');
+      if(isVectorSmart(slot))throw Error('矢量智能对象不支持自动换鞋');
       var taskId=a.id+'-display-'+a.slotId;
       actions.openSmartTask({id:taskId,documentId:a.documentId,layerId:a.slotId});
-      var t=smartTask(taskId),d=t.doc;t.box=[0,0,d.width.as('px'),d.height.as('px')];t.layerId=slot.id;t.parent=parent;
+      var t=smartTask(taskId),d=t.doc;t.width=d.width.as('px');t.height=d.height.as('px');t.box=[0,0,t.width,t.height];t.layerId=slot.id;t.parent=parent;
       protections[taskId]={documentId:d.id,layerId:slot.id,box:t.box,channel:null};
       app.activeDocument=d;exportCrop(d,t.box,a.input);app.activeDocument=parent;
       return {id:taskId,documentId:d.id,size:[d.width.as('px'),d.height.as('px')],input:a.input};
     },
     applyProductDisplayAI:function(a){
-      var taskId=a.id, t=smartTask(taskId);if(!t)throw Error('产品展示 AI 任务已失效');
-      var parent=t.parent, original=find(parent.layers,t.layerId);if(!original)throw Error('产品展示槽位已不存在');
-      var history=parent.activeHistoryState,target=null;
+      var t=smartTask(a.id);if(!t)throw Error('产品展示 AI 任务已失效');
+      var parent=documentFor(a.documentId,true);
+      if(parent.id!==t.parent.id)throw Error('产品展示父文档已变化');
+      var original=find(parent.layers,t.layerId);if(!original)throw Error('产品展示槽位已不存在');
+      var history=parent.activeHistoryState,target=null,generated=null,normalized=null,stage='validate',dialogs=app.displayDialogs;
       try{
-        app.activeDocument=parent;parent.activeLayer=original;
-        executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);target=parent.activeLayer;
+        app.displayDialogs=DialogModes.NO;
         var f=new File(a.output);if(!f.exists)throw Error('AI 生成结果不存在');
-        var d=new ActionDescriptor();d.putPath(c('null'),f);executeAction(s('placedLayerReplaceContents'),d,DialogModes.NO);
+        if(!(t.width>0&&t.height>0))throw Error('原槽位尺寸无效');
+        stage='normalize';generated=app.open(f);
+        var iw=generated.width.as('px'),ih=generated.height.as('px');
+        if(Math.abs((iw/ih)/(t.width/t.height)-1)>.01)throw Error('生成比例与原槽位不符，保留生成图，禁止拉伸回写');
+        generated.resizeImage(UnitValue(t.width,'px'),UnitValue(t.height,'px'),null,ResampleMethod.BICUBIC);
+        stage='save_normalized';
+        normalized=new File(a.contentFile||Folder.temp.fsName+'/AI-Shoe-display-'+a.id+'-'+new Date().getTime()+'.psb');
+        if(normalized.exists)normalized=new File(normalized.fsName+'.'+new Date().getTime()+'.psb');
+        if(normalized.exists)throw Error('临时文件已存在，请重试');
+        var save=new ActionDescriptor(),opts=new ActionDescriptor();opts.putBoolean(s('maximizeCompatibility'),true);
+        save.putObject(c('As  '),s('largeDocumentFormat'),opts);save.putPath(c('In  '),normalized);save.putBoolean(c('Cpy '),true);save.putBoolean(c('LwCs'),true);
+        executeAction(c('save'),save,DialogModes.NO);
+        normalized=new File(normalized.fsName);
+        if(!normalized.exists||normalized.length<=0)throw Error('标准化PSB未写入指定路径');
+        generated.close(SaveOptions.DONOTSAVECHANGES);generated=null;
+        stage='copy_target';app.activeDocument=parent;parent.activeLayer=original;
+        executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);target=parent.activeLayer;
+        if(target.id===original.id||target.kind!==LayerKind.SMARTOBJECT)throw Error('未创建独立智能对象');
+        stage='replace_contents';app.activeDocument=parent;parent.activeLayer=target;
+        var replacement=new ActionDescriptor();replacement.putPath(c('null'),normalized);
+        executeAction(s('placedLayerReplaceContents'),replacement,DialogModes.NO);
         target.name=a.name||('[AI-Shoe] 产品展示 '+t.layerId);target.visible=true;original.visible=false;
-        return {layerId:target.id,originalLayerId:original.id,documentId:parent.id};
-      }catch(e){try{app.activeDocument=parent;parent.activeHistoryState=history;}catch(ignore){}throw e;}
-      finally{app.activeDocument=parent;}
+        return {layerId:target.id,originalLayerId:original.id,documentId:parent.id,contentFile:normalized.fsName};
+      }catch(e){
+        var recovery=[];
+        if(generated){try{generated.close(SaveOptions.DONOTSAVECHANGES);generated=null;}catch(closeError){recovery.push('关闭临时图失败：'+closeError.message);}}
+        try{app.activeDocument=parent;parent.activeHistoryState=history;}catch(rollbackError){recovery.push('回滚失败：'+rollbackError.message);}
+        if(recovery.length)t.recoveryBlocked=true;
+        throw Error('产品展示 '+stage+'：'+e.message+(recovery.length?'；任务锁定；'+recovery.join('；'):''));
+      }finally{app.displayDialogs=dialogs;app.activeDocument=parent;}
     },
     applyProductDisplayRow:function(a){
       var parent=documentFor(a.documentId,true),t=smartTask(a.id);
@@ -369,7 +403,10 @@ var AI_Shoe_CEP = (function () {
           if(!originalTarget)throw Error('回写后找不到目标智能对象');
           app.activeDocument=t.parent; t.parent.activeLayer=originalTarget;
           executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);
-          target=t.parent.activeLayer; target.visible=true; originalTarget.visible=false;
+          target=t.parent.activeLayer; target.grouped=originalTarget.grouped; target.visible=true; originalTarget.visible=false;
+          // Keep the replacement adjacent to the source layer. Photoshop can
+          // insert MakeCopy at a different stack position in nested groups.
+          try{target.move(originalTarget,ElementPlacement.PLACEBEFORE);}catch(moveError){/* stack position is best effort */}
           t.parentTargetId=target.id;
           if(t.parentKey && smartTaskParents[t.parentKey]) smartTaskParents[t.parentKey].parentTargetId=target.id;
         }
@@ -379,6 +416,10 @@ var AI_Shoe_CEP = (function () {
         // the action; otherwise Photoshop replaces the hidden original layer.
         t.parent.activeLayer=target;
         var desc=new ActionDescriptor();desc.putPath(c('null'),new File(a.contentFile));executeAction(s('placedLayerReplaceContents'),desc,DialogModes.NO);
+        // MakeCopy/ReplaceContents can drop the original clipping relationship.
+        // Restore it even for a cached target from a previous write.
+        target.grouped=originalTarget.grouped;
+        try{target.move(originalTarget,ElementPlacement.PLACEBEFORE);}catch(moveError2){/* cached target may already be positioned */}
         target.visible=true; t.parent.activeLayer=target;
         try { app.refresh(); } catch(ignoreRefresh) {}
         t.patchGroupIds=newPatchGroups;
