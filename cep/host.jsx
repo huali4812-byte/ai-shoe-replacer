@@ -260,8 +260,12 @@ var AI_Shoe_CEP = (function () {
         if(!(t.width>0&&t.height>0))throw Error('原槽位尺寸无效');
         stage='normalize';generated=app.open(f);
         var iw=generated.width.as('px'),ih=generated.height.as('px');
-        if(Math.abs((iw/ih)/(t.width/t.height)-1)>.01)throw Error('生成比例与原槽位不符，保留生成图，禁止拉伸回写');
-        generated.resizeImage(UnitValue(t.width,'px'),UnitValue(t.height,'px'),null,ResampleMethod.BICUBIC);
+        // Gemini may return a square even when the slot canvas is 3:2 (or the
+        // reverse). Fit uniformly, then add canvas around it; never stretch
+        // the generated shoe to force a ratio.
+        var fit=Math.min(t.width/iw,t.height/ih),fitW=Math.max(1,Math.round(iw*fit)),fitH=Math.max(1,Math.round(ih*fit));
+        generated.resizeImage(UnitValue(fitW,'px'),UnitValue(fitH,'px'),null,ResampleMethod.BICUBIC);
+        generated.resizeCanvas(UnitValue(t.width,'px'),UnitValue(t.height,'px'),AnchorPosition.MIDDLECENTER);
         stage='save_normalized';
         normalized=new File(a.contentFile||Folder.temp.fsName+'/AI-Shoe-display-'+a.id+'-'+new Date().getTime()+'.psb');
         if(normalized.exists)normalized=new File(normalized.fsName+'.'+new Date().getTime()+'.psb');
