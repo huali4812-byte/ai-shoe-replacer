@@ -23,6 +23,13 @@ var AI_Shoe_CEP = (function () {
     if (requireWorking && !working[d.id]) throw Error('请先创建工作副本，不能直接写入原始文档');
     return d;
   }
+  function activatePreparedParent(id){
+    if(!id||!working[id])throw Error('未登记的工作副本，禁止自动切换或写入');
+    for(var i=0;i<app.documents.length;i++){
+      if(app.documents[i].id===id){app.activeDocument=app.documents[i];return documentFor(id,true);}
+    }
+    throw Error('对应工作副本已关闭，请重新创建工作副本');
+  }
   function rgb(d) { d.activeChannels = d.componentChannels; }
   function bounds(layer) { var a = layer.bounds, b = []; for (var i = 0; i < 4; i++) b.push(a[i].as('px')); return b; }
   function find(list, id) {
@@ -186,7 +193,7 @@ var AI_Shoe_CEP = (function () {
       return {documentId:copy.id,width:copy.width.as('px'),height:copy.height.as('px')};
     },
     autoPrepareSmart:function(a){
-      var parent=documentFor(a.documentId,true);
+      var parent=activatePreparedParent(a.documentId);
       try{
         actions.openSmartTask(a);var t=smartTasks[a.id],d=t.doc,items=[],channels=[];
         function collect(ls,p){for(var i=0;i<ls.length;i++){var l=ls[i];if(!l.visible)continue;if(l.typename==='LayerSet'){collect(l.layers,p+'/'+l.name);continue;}items.push({id:l.id,name:p+'/'+l.name,kind:String(l.kind),bounds:bounds(l)});}}
@@ -197,6 +204,14 @@ var AI_Shoe_CEP = (function () {
         var markers=[];
         function collectMarkers(ls){for(var mi=0;mi<ls.length;mi++){var ml=ls[mi];if(!ml.visible)continue;if(ml.typename==='LayerSet'){collectMarkers(ml.layers);continue;}if(ml.kind===LayerKind.TEXT){var text=String(ml.textItem.contents).replace(/\s/g,'');if(/^(主推|次推)(色)?$/.test(text))markers.push({id:ml.id,role:text.indexOf('主推')===0?'主推':'次推',bounds:bounds(ml)});}}}
         if(a.dualRole){collectMarkers(d.layers);var main=false,secondary=false;for(var mi=0;mi<markers.length;mi++){main=main||markers[mi].role==='主推';secondary=secondary||markers[mi].role==='次推';}if(!main||!secondary)throw Error('紫色图内部需有独立的主推、次推文字图层；不支持已合并到照片中的提示字');t.roleMarkers=markers;}
+        // Structural callouts must be present in the immediate containing group.
+        // A section name alone also matches people photographs in this template.
+        var outer=find(parent.layers,t.layerId),contextText='';
+        if(outer&&outer.parent.typename==='LayerSet'){
+          var siblings=outer.parent.layers;
+          for(var si=0;si<siblings.length;si++){var sl=siblings[si];if(sl.visible&&sl.typename!=='LayerSet'&&sl.kind===LayerKind.TEXT)contextText+=String(sl.textItem.contents);}
+        }
+        var sceneType=!a.dualRole&&/内置加固片/.test(contextText)&&/加固后跟杯/.test(contextText)?'shoe_structure':'person';
         var sourceFile=a.contentFile.replace(/\.psb$/i,'-full.png');
         try{for(var mi=0;mi<markers.length;mi++)find(d.layers,markers[mi].id).visible=false;exportCrop(d,[0,0,d.width.as('px'),d.height.as('px')],sourceFile);}
         finally{for(var mi=0;mi<markers.length;mi++)find(d.layers,markers[mi].id).visible=true;}
@@ -204,7 +219,7 @@ var AI_Shoe_CEP = (function () {
           d.selection.load(channels[0]);var region=actions.captureSmartProtection({id:a.id,layerId:t.layerId});
           return {box:region.box,smartLayerId:t.layerId,source:'namedChannel',sourceFile:sourceFile,regions:[{box:region.box,mask:null}]};
         }
-        return {source:'needsVision',sourceFile:sourceFile,smartLayerId:t.layerId,documentId:d.id,roleMarkers:markers};
+        return {source:'needsVision',sourceFile:sourceFile,smartLayerId:t.layerId,documentId:d.id,roleMarkers:markers,sceneType:sceneType};
       }finally{app.activeDocument=parent;}
     },
     inspectProductDisplay:function(a){
@@ -236,6 +251,18 @@ var AI_Shoe_CEP = (function () {
         if(!rows.length)throw Error('产品展示待确认：内部未找到颜色标题及三视角智能对象展示行');
         t.productDisplayRows=rows;return {documentId:d.id,rows:rows,width:d.width.as('px'),height:d.height.as('px')};
       }finally{app.activeDocument=parent;}
+    },
+    updateProductDisplayTitle:function(a){
+      var parent=documentFor(a.documentId,true),t=smartTask(a.id);
+      if(!t||t.parent.id!==parent.id||t.displayScope!=='row')throw Error('该模板标题不在父文档展示行中，暂不自动改字');
+      var row=null;for(var i=0;i<t.productDisplayRows.length;i++)if(t.productDisplayRows[i].id===a.rowId)row=t.productDisplayRows[i];
+      if(!row||!a.color||typeof a.color!=='string')throw Error('展示行或目标颜色无效');
+      var title=find(parent.layers,row.colorLayerId),group=find(parent.layers,row.id);
+      if(!title||!group||title.parent.id!==group.id||title.kind!==LayerKind.TEXT)throw Error('颜色标题图层已变化');
+      if(String(title.textItem.contents)!==row.color&&String(title.textItem.contents)!==a.color)throw Error('标题已被手动修改，请重新核对');
+      var history=parent.activeHistoryState;
+      try{title.textItem.contents=a.color;row.color=a.color;return {color:a.color,layerId:title.id};}
+      catch(e){parent.activeHistoryState=history;throw e;}
     },
     prepareProductDisplayAI:function(a){
       var parent=documentFor(a.documentId,true),slot=find(parent.layers,a.slotId);
@@ -407,10 +434,7 @@ var AI_Shoe_CEP = (function () {
           if(!originalTarget)throw Error('回写后找不到目标智能对象');
           app.activeDocument=t.parent; t.parent.activeLayer=originalTarget;
           executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);
-          target=t.parent.activeLayer; target.grouped=originalTarget.grouped; target.visible=true; originalTarget.visible=false;
-          // Keep the replacement adjacent to the source layer. Photoshop can
-          // insert MakeCopy at a different stack position in nested groups.
-          try{target.move(originalTarget,ElementPlacement.PLACEBEFORE);}catch(moveError){/* stack position is best effort */}
+          target=t.parent.activeLayer;
           t.parentTargetId=target.id;
           if(t.parentKey && smartTaskParents[t.parentKey]) smartTaskParents[t.parentKey].parentTargetId=target.id;
         }
@@ -422,8 +446,12 @@ var AI_Shoe_CEP = (function () {
         var desc=new ActionDescriptor();desc.putPath(c('null'),new File(a.contentFile));executeAction(s('placedLayerReplaceContents'),desc,DialogModes.NO);
         // MakeCopy/ReplaceContents can drop the original clipping relationship.
         // Restore it even for a cached target from a previous write.
+        if(!originalTarget||target.id===originalTarget.id)throw Error('回写目标与原层身份异常');
+        target.move(originalTarget,ElementPlacement.PLACEBEFORE);
+        // Moving a layer can release its clipping mask. Restore clipping last.
         target.grouped=originalTarget.grouped;
-        try{target.move(originalTarget,ElementPlacement.PLACEBEFORE);}catch(moveError2){/* cached target may already be positioned */}
+        originalTarget.visible=false;
+        if(target.grouped!==originalTarget.grouped||originalTarget.visible)throw Error('回写剪贴关系或原层可见性校验失败');
         target.visible=true; t.parent.activeLayer=target;
         try { app.refresh(); } catch(ignoreRefresh) {}
         t.patchGroupIds=newPatchGroups;

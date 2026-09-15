@@ -15,7 +15,7 @@ assert.throws(()=>svc.makePlan(row,product,[...entries,entries[0]]),/必须唯�
 assert.throws(()=>svc.makePlan({...row,slots:[{view:'pair',targetBox:[0,0,1000,1000]}]},product,entries),/像素不足/);
 assert.throws(()=>svc.makePlan(row,null,entries),/颜色未明确/);
 const host=fs.readFileSync(path.join(__dirname,'../cep/host.jsx'),'utf8');new vm.Script(host.replace(/^#target.*$/mg,''));
-const inspectText=host.slice(host.indexOf('inspectProductDisplay:function(a){')+'inspectProductDisplay:'.length,host.indexOf('    prepareProductDisplayAI:')).trim().replace(/,$/,'');
+const inspectText=host.slice(host.indexOf('inspectProductDisplay:function(a){')+'inspectProductDisplay:'.length,host.indexOf('    updateProductDisplayTitle:')).trim().replace(/,$/,'');
 const so=(id,name)=>({id,name,kind:'smart',visible:true,bounds:[0,0,40,30]});
 const group={id:9,name:'展示行',visible:true,typename:'LayerSet',bounds:[0,0,100,100],layers:[{id:1,name:'色名',kind:'text',visible:true,textItem:{contents:product.color}},...['1','2','3'].map((n,i)=>so(i+2,n)),...['1','2','3'].map((n,i)=>({id:i+5,name:n+'范围框',bounds:[0,0,40,30],visible:false}))]};
 const parent={id:20},task={doc:{id:21,layers:[group],width:{as:()=>100},height:{as:()=>100}}};

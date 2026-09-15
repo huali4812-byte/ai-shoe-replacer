@@ -109,3 +109,38 @@ body[data-theme="light"] .action-dock{background:#f0f3f7;border-color:#d0d7e2}
 body[data-theme="light"] .primary-button{background:#4f70b5;border-color:#6687ca;color:#fff}
 body[data-theme="light"] .task strong{color:#28354a}
 body[data-theme="light"] .task p:last-of-type{background:#edf2f8;color:#51627d}
+
+/* Complete theme palette. Geometry and workflow remain defined above. */
+body{--canvas:#22252b;--card:#2b3038;--control:#343b46;--control-hover:#414c5e;--input:#252a32;--line:#454d5b;--label:#c4cbd6;--secondary:#abb6c6;--link:#a9c3ff;--primary:#4568b0;--primary-hover:#537ac9;--disabled-bg:#303640;--disabled-text:#929cab;--info-bg:#303c50;--info-text:#c1d2ee;--status-bg:#393325;--status-border:#675a36;--status-text:#f0d391;--status-label:#d6bb7b;--scroll:#687387;--arrow-bg:#48566c}
+body[data-theme="light"]{--bg:#f3f5f8;--panel:#fff;--text:#263244;--muted:#596779;--border:#dbe1ea;--accent:#4568b0;--canvas:#f3f5f8;--card:#fff;--control:#f0f3f8;--control-hover:#e3eaf5;--input:#fff;--line:#dbe1ea;--label:#526075;--secondary:#627086;--link:#355b9b;--primary:#4568b0;--primary-hover:#365793;--disabled-bg:#edf0f4;--disabled-text:#758094;--info-bg:#f0f4fa;--info-text:#465c7b;--status-bg:#fff7e5;--status-border:#e8d6a6;--status-text:#735315;--status-label:#806125;--scroll:#acb6c6;--arrow-bg:#66758b}
+body[data-theme] .control-panel,body[data-theme] .action-dock{background:var(--bg);border-color:var(--line)}
+body[data-theme] .task-panel{background:var(--canvas)}
+body[data-theme] .brand,body[data-theme] .task-header{background:var(--card);border-color:var(--line)}
+body[data-theme] .brand span{background:var(--control);color:var(--secondary);border-color:var(--line)}
+body[data-theme] #doc,body[data-theme] label,body[data-theme] summary,body[data-theme] .task-path summary,body[data-theme] .task-path div,body[data-theme] .revision-comparison figcaption{color:var(--label)}
+body[data-theme] .step,body[data-theme] #tasks:empty:before{color:var(--secondary)}
+body[data-theme] .task{background:var(--card);border-color:var(--line);box-shadow:none}
+body[data-theme] .task strong{color:var(--text);border-color:var(--line)}
+body[data-theme] .task p:nth-of-type(2){color:var(--label)}
+body[data-theme] .task p:last-of-type{color:var(--info-text);background:var(--info-bg)}
+body[data-theme] .revision{border-color:var(--line)}
+body[data-theme] .revision summary{color:var(--link)}
+body[data-theme] input[type=text],body[data-theme] select,body[data-theme] .revision textarea{background:var(--input);color:var(--text);border-color:var(--line)}
+body[data-theme] input::placeholder,body[data-theme] textarea::placeholder{color:var(--secondary);opacity:1}
+body[data-theme] button,body[data-theme] .button-row button{background:var(--control);color:var(--text);border-color:var(--line);box-shadow:none;transition:background .12s,border-color .12s}
+body[data-theme] button:hover:not(:disabled){background:var(--control-hover);border-color:var(--secondary);transform:none}
+body[data-theme] .primary-button{background:var(--primary);color:#fff;border-color:var(--primary);box-shadow:none}
+body[data-theme] .primary-button:hover:not(:disabled){background:var(--primary-hover);border-color:var(--primary-hover)}
+body[data-theme] button:disabled,body[data-theme] input:disabled,body[data-theme] select:disabled,body[data-theme] textarea:disabled{background:var(--disabled-bg);color:var(--disabled-text);border-color:var(--line);opacity:1;cursor:default}
+body[data-theme] .quiet-button{background:transparent;border-color:transparent;color:var(--link)}
+body[data-theme] #count{background:var(--info-bg);color:var(--info-text);border-color:var(--line)}
+body[data-theme] .status-panel{background:var(--status-bg);border-color:var(--status-border)}
+body[data-theme] .status-label{color:var(--status-label)}
+body[data-theme] #message{color:var(--status-text)}
+body[data-theme] .task .task-toggle{background:var(--arrow-bg);border:0;color:#fff;box-shadow:none}
+body[data-theme] .task .task-toggle.normal{color:#fff}
+body[data-theme] .task .task-toggle.warning{color:#ffdc76}
+body[data-theme] .task .task-toggle:hover{background:#52637d;border:0}
+body[data-theme] .revision-comparison img{background:var(--canvas)}
+body[data-theme] ::-webkit-scrollbar-thumb{background:var(--scroll);border-color:var(--canvas)}
+body[data-theme] ::-webkit-scrollbar-thumb:hover{background:var(--secondary)}

@@ -63,4 +63,4 @@ async function prepareAIPlan(row,product,entries,folder){
   }
   return {rowId:row.id,product,slots};
 }
-module.exports={VIEWS,colorKey,productsForRow,loadMaterials,makePlan,verifyPlan,prepareAIPlan};
+module.exports={outputFingerprint:flow.fingerprint,VIEWS,colorKey,productsForRow,loadMaterials,makePlan,verifyPlan,prepareAIPlan};

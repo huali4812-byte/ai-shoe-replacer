@@ -112,7 +112,7 @@ def composite(request):
     # Expand the editable boundary slightly so the replacement shoe is not
     # clipped by the old shoe silhouette (the source shoe mask is only a
     # protection guide, not the new shoe's final outline).
-    expanded_mask = mask.filter(ImageFilter.MaxFilter(9))
+    expanded_mask = mask if region.get('sceneType') == 'shoe_structure' else mask.filter(ImageFilter.MaxFilter(9))
     alpha = np.array(expanded_mask)
     outside_mask = alpha == 0
     delta = np.abs(np.array(original, dtype=np.float32)-np.array(generated, dtype=np.float32)).mean(axis=2)
@@ -321,6 +321,7 @@ class Vision:
         return {'mask':request['output'],'pullTabRecovery':diagnostics}
 
     def detect(self, request):
+        structure = request.get('sceneType') == 'shoe_structure' and not request.get('roleMarkers')
         original = Image.open(request['source']).convert('RGB')
         if original.width*original.height > 80_000_000:
             raise ValueError('内部图片超过 8000 万像素，需单独处理')
@@ -354,7 +355,7 @@ class Vision:
         # A second pass on overlapping tiles gives small/background shoes
         # more pixels without lowering the confidence threshold.
         for left, top in [(0, 0), (image.width//3, 0),
-                          (0, image.height//3), (image.width//3, image.height//3)]:
+                          (0, image.height//3), (image.width//3, image.height//3)] if not structure else []:
             tile = image.crop((left, top, min(image.width, left+image.width*2//3),
                                min(image.height, top+image.height*2//3)))
             ti = self.detector_processor(images=tile, text='a shoe.', return_tensors='pt')
@@ -380,7 +381,7 @@ class Vision:
                 if not duplicate:
                     detections.append({'box':box,'score':score,'label':'a shoe','pass':'tile'})
         shoes = [d for d in detections if 'shoe' in d['label']]
-        report = {'source':request['source'], 'size':list(original.size), 'detections':detections, 'regions':[], 'detector':'grounding-dino-tiny', 'safePadding':{'x':.14,'y':.18}}
+        report = {'source':request['source'], 'size':list(original.size), 'detections':detections, 'regions':[], 'detector':'grounding-dino-tiny', 'safePadding':{'x':.14,'y':.18}, 'sceneType':'shoe_structure' if structure else 'person'}
         if not shoes:
             report['status'] = 'no_shoe_detected'
             return report
@@ -439,7 +440,17 @@ class Vision:
             # Small expansion for shoe shape and contact blending; subtract detected clothing/skin.
             radius = max(1, min(12, round(math.sqrt(area)*.025)))
             expanded = np.array(Image.fromarray(mask.astype('uint8')*255).filter(ImageFilter.MaxFilter(radius*2+1))) > 0
-            protection = protected_full if dual else protected
+            if structure:
+                # Human labels on an exploded diagram are not clothing evidence.
+                # Restrict writes to one confidently segmented, horizontal body;
+                # floating inserts and the background remain outside the mask.
+                bw, bh = d['box'][2]-d['box'][0], d['box'][3]-d['box'][1]
+                if confidence < .95 or bw / max(bh, 1) < 2 or bw < image.width * .5:
+                    d['skip'] = 'structure_body_uncertain'
+                    continue
+                expanded = mask.copy()
+                d['protectionMode'] = 'structure_body_only'
+            protection = np.zeros_like(expanded) if structure else (protected_full if dual else protected)
             protected_overlap = int(np.count_nonzero(expanded & protection))
             expanded &= ~protection
             d['protected_overlap'] = protected_overlap
@@ -478,7 +489,7 @@ class Vision:
             mask_image = Image.fromarray(full.astype('uint8')*255).crop(box)
             crop = original.crop(box)
             detail_diagnostics = []
-            for item in group:
+            for item in ([] if structure else group):
                 b = detections[item['index']]['dino_box']
                 local = [b[0]-box[0],b[1]-box[1],b[2]-box[0],b[3]-box[1]]
                 context = safe_box(local, crop.size, xpad=.20, ypad=.30)
