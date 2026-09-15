@@ -43,6 +43,13 @@ var AI_Shoe_CEP = (function () {
         var productDisplay = /产品展示/.test(String(l.name)) || /产品展示/.test(String(parent));
         var isGenerated = generated || l.name.indexOf('[AI-Shoe]') === 0 || l.name.indexOf('[换鞋测试]') === 0;
         var effectiveVisible = visible && l.visible;
+        var vectorLayer=(/矢量智能对象|\.ai$/i.test(String(l.name)));
+        if(vectorLayer){report.layers.push({layerId:l.id,name:name,kind:'VECTOR',visible:effectiveVisible,reason:'矢量智能对象，跳过自动处理'});continue;}
+        if(productDisplay&&effectiveVisible&&!isGenerated&&l.typename==='LayerSet'){
+          var rowViews={},rowCount=0;
+          for(var di=0;di<l.layers.length;di++){var dl=l.layers[di],dn=String(dl.name),dv=dn.match(/^([123])$/)||dn.match(/_(?:bd|t)_(pair|back|sole)$/i);if(dl.typename!=='LayerSet'&&dl.kind===LayerKind.SMARTOBJECT&&dl.visible&&dv){rowViews[dv[1]]=true;rowCount++;}}
+          if(rowCount>=2){report.tasks.push({documentId:d.id,layerId:l.id,name:name,role:'产品展示',taskType:'product_display',displayScope:'row',displayEvidence:'named_group_smart_slots',bounds:bounds(l),slots:1});continue;}
+        }
         report.scanned++;
         try {
           color = label(l); report.labels[color] = (report.labels[color] || 0) + 1;
@@ -56,10 +63,13 @@ var AI_Shoe_CEP = (function () {
           else if (l.typename === 'LayerSet') reason = '图层组，继续检查子层';
           else if (l.kind !== LayerKind.SMARTOBJECT) reason = '非智能对象，不自动替换修补层';
           else if (l.kind !== LayerKind.NORMAL && l.kind !== LayerKind.SMARTOBJECT) reason = '非像素层或智能对象';
-          else if (!role && productDisplay && l.kind === LayerKind.SMARTOBJECT) role = '产品展示';
-          else if (!role) reason = '无可用红绿紫标记';
-          else if (b[2] <= b[0] || b[3] <= b[1]) reason = '空区域';
-          else report.tasks.push({documentId:d.id,layerId:l.id,name:name,role:role,bounds:b,slots:role === '双鞋' ? 2 : 1,taskType:role === '产品展示' ? 'product_display' : 'shoe'});
+          else {
+            var displayCandidate=productDisplay||(!role&&b[1]>=report.height*.7);
+            if(displayCandidate)role='产品展示';
+            if(!role)reason='无可用红绿紫标记';
+            else if(b[2]<=b[0]||b[3]<=b[1])reason='空区域';
+            else report.tasks.push({documentId:d.id,layerId:l.id,name:name,role:role,bounds:b,slots:role==='双鞋'?2:1,taskType:displayCandidate?'product_display':'shoe',displayEvidence:productDisplay?'named':'bottom_pending_structure'});
+          }
         }
         var kindName = l.typename === 'LayerSet' ? 'GROUP' : l.kind === LayerKind.SMARTOBJECT ? 'SMARTOBJECT' : (l.kind === LayerKind.NORMAL ? 'NORMAL' : String(l.kind));
         report.layers.push({layerId:l.id,name:name,label:color,role:role,kind:kindName,visible:effectiveVisible,bounds:b,reason:reason || '候选鞋位，需确认区域'});
@@ -190,19 +200,104 @@ var AI_Shoe_CEP = (function () {
       }finally{app.activeDocument=parent;}
     },
     inspectProductDisplay:function(a){
-      var t=smartTasks[a.id];if(!t)throw Error('请先准备产品展示智能对象');
-      var d=t.doc,root=find(d.layers,a.rootLayerId)||d.layers[0],rows=[];
-      function walk(list){for(var i=0;i<list.length;i++){var g=list[i];if(g.typename!=='LayerSet')continue;var hasSlot=false,slots={},color='';
-        for(var j=0;j<g.layers.length;j++){var l=g.layers[j],n=String(l.name);if(l.kind===LayerKind.TEXT&&!color)color=String(l.textItem.contents).replace(/\s/g,'');
-          var m=n.match(/^([123])$/);if(m&&l.kind===LayerKind.SMARTOBJECT){slots[m[1]]={id:l.id,name:n,bounds:bounds(l)};hasSlot=true;}
-          if(/^[123].*范围框/.test(n))slots[n.charAt(0)+'Box']=bounds(l);
+      var parent=documentFor(a.documentId,true);
+      try{
+        var candidate=find(parent.layers,a.layerId),t,d,rows=[];
+        if(a.displayScope==='row'){
+          if(!candidate||candidate.typename!=='LayerSet'||!/产品展示/.test(a.name||''))throw Error('产品展示行目标无效');
+          t=smartTasks[a.id];if(!t)t=smartTasks[a.id]={doc:parent,parent:parent,layerId:a.layerId,displayScope:'row'};
+          if(t.recoveryBlocked)throw Error('上次回滚失败，任务锁定');d=parent;
+        }else{actions.openSmartTask(a);t=smartTask(a.id);d=t.doc;}
+        function walk(list){for(var i=0;i<list.length;i++){var g=list[i];if(g.typename!=='LayerSet'||!g.visible)continue;
+          var slots=[],colors=[],frames={},error='',views={};
+          for(var j=0;j<g.layers.length;j++){var l=g.layers[j],n=String(l.name),m=n.match(/^([123])\s*范围框$/);
+            if(m){if(frames[m[1]])error='重复范围框';frames[m[1]]={id:l.id,box:bounds(l)};continue;}
+            if(!l.visible)continue;
+            if(l.kind===LayerKind.TEXT)colors.push({id:l.id,text:String(l.textItem.contents)});
+            var number=n.match(/^([123])$/),named=n.match(/_(?:bd|t)_(pair|back|sole)$/i),view=number?({'1':'pair','2':'back','3':'sole'})[number[1]]:named?named[1].toLowerCase():null;
+            if(view&&l.kind===LayerKind.SMARTOBJECT){if(views[view])error='重复视角 '+view;views[view]=true;slots.push({id:l.id,name:n,view:view,bounds:bounds(l)});}
+          }
+          if(slots.length){
+            if(colors.length!==1)error='颜色标题必须唯一，实际 '+colors.length;
+            if(slots.length!==3||!views.pair||!views.back||!views.sole)error='需 pair/back/sole 三个智能对象';
+            for(var k=0;k<slots.length;k++){var num=({pair:'1',back:'2',sole:'3'})[slots[k].view],f=frames[num];if(!f){slots[k].targetBox=slots[k].bounds;slots[k].fitMode='existing_canvas';}else{slots[k].targetBox=f.box;slots[k].frameId=f.id;slots[k].fitMode='subject_frame';}}
+            rows.push({id:g.id,name:g.name,color:colors.length===1?colors[0].text:'',colorLayerId:colors.length===1?colors[0].id:null,slots:slots,bounds:bounds(g),error:error});
+          }else walk(g.layers);
+        }}
+        walk(a.displayScope==='row'?[candidate]:d.layers);rows.sort(function(x,y){return x.bounds[1]-y.bounds[1]});
+        if(!rows.length)throw Error('产品展示待确认：内部未找到颜色标题及三视角智能对象展示行');
+        t.productDisplayRows=rows;return {documentId:d.id,rows:rows,width:d.width.as('px'),height:d.height.as('px')};
+      }finally{app.activeDocument=parent;}
+    },
+    prepareProductDisplayAI:function(a){
+      var parent=documentFor(a.documentId,true),slot=find(parent.layers,a.slotId);
+      if(!slot||slot.kind!==LayerKind.SMARTOBJECT)throw Error('产品展示槽位不是智能对象');
+      if(/矢量智能对象|\.ai$/i.test(String(slot.name)))throw Error('矢量智能对象不支持自动换鞋');
+      var taskId=a.id+'-display-'+a.slotId;
+      actions.openSmartTask({id:taskId,documentId:a.documentId,layerId:a.slotId});
+      var t=smartTask(taskId),d=t.doc;t.box=[0,0,d.width.as('px'),d.height.as('px')];t.layerId=slot.id;t.parent=parent;
+      protections[taskId]={documentId:d.id,layerId:slot.id,box:t.box,channel:null};
+      app.activeDocument=d;exportCrop(d,t.box,a.input);app.activeDocument=parent;
+      return {id:taskId,documentId:d.id,size:[d.width.as('px'),d.height.as('px')],input:a.input};
+    },
+    applyProductDisplayAI:function(a){
+      var taskId=a.id, t=smartTask(taskId);if(!t)throw Error('产品展示 AI 任务已失效');
+      var parent=t.parent, original=find(parent.layers,t.layerId);if(!original)throw Error('产品展示槽位已不存在');
+      var history=parent.activeHistoryState,target=null;
+      try{
+        app.activeDocument=parent;parent.activeLayer=original;
+        executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);target=parent.activeLayer;
+        var f=new File(a.output);if(!f.exists)throw Error('AI 生成结果不存在');
+        var d=new ActionDescriptor();d.putPath(c('null'),f);executeAction(s('placedLayerReplaceContents'),d,DialogModes.NO);
+        target.name=a.name||('[AI-Shoe] 产品展示 '+t.layerId);target.visible=true;original.visible=false;
+        return {layerId:target.id,originalLayerId:original.id,documentId:parent.id};
+      }catch(e){try{app.activeDocument=parent;parent.activeHistoryState=history;}catch(ignore){}throw e;}
+      finally{app.activeDocument=parent;}
+    },
+    applyProductDisplayRow:function(a){
+      var parent=documentFor(a.documentId,true),t=smartTask(a.id);
+      if(!t||t.parent.id!==parent.id||t.layerId!==a.layerId)throw Error('产品展示内部任务已失效');
+      var row=null;for(var ri=0;ri<(t.productDisplayRows||[]).length;ri++)if(t.productDisplayRows[ri].id===a.plan.rowId)row=t.productDisplayRows[ri];
+      if(!row||row.error||a.plan.slots.length!==3)throw Error('展示行结构未确认');
+      var group=find(t.doc.layers,row.id),title=find(t.doc.layers,row.colorLayerId);
+      if(!group||!group.visible||!title||String(title.textItem.contents)!==row.color)throw Error('颜色标题或展示行已变化，请重新读取');
+      var ph=parent.activeHistoryState,previous=t.parentTargetId;
+      app.activeDocument=t.doc;var ih=t.doc.activeHistoryState;
+      try{
+        for(var i=0;i<a.plan.slots.length;i++){
+          var job=a.plan.slots[i],expected=null;for(var j=0;j<row.slots.length;j++)if(row.slots[j].id===job.id)expected=row.slots[j];
+          if(!expected||expected.fitMode!==job.fitMode||json(expected.targetBox)!==json(job.targetBox))throw Error('展示槽位计划不一致');
+          var layer=find(t.doc.layers,job.id),frame=find(t.doc.layers,expected.frameId);
+          if(!layer||layer.parent.id!==group.id||layer.kind!==LayerKind.SMARTOBJECT||!layer.visible||(expected.frameId&&(!frame||json(bounds(frame))!==json(expected.targetBox)))||json(bounds(layer))!==json(expected.bounds))throw Error('展示槽位或范围框已变化');
+          var f=new File(job.file);if(!f.exists)throw Error('展示素材不存在');
+          t.doc.activeLayer=layer;var ref=new ActionReference();ref.putIdentifier(s('layer'),layer.id);var ld=executeActionGet(ref);
+          if(ld.hasKey(s('smartObject'))){var so=ld.getObjectValue(s('smartObject'));if(so.hasKey(s('linked'))&&so.getBoolean(s('linked')))throw Error('链接展示素材不自动替换');}
+          if(ld.hasKey(s('smartObjectMore'))){var more=ld.getObjectValue(s('smartObjectMore'));
+            if(more.hasKey(s('warp'))){var warp=more.getObjectValue(s('warp'));if(warp.hasKey(s('warpStyle'))&&typeIDToStringID(warp.getEnumerationValue(s('warpStyle')))!=='warpNone')throw Error('展示槽位有变形，请先确认模板');}
+            if(more.hasKey(s('transform'))){var tr=more.getList(s('transform'));if(tr.count!==8||Math.abs(tr.getDouble(1)-tr.getDouble(3))>.5||Math.abs(tr.getDouble(2)-tr.getDouble(4))>.5||Math.abs(tr.getDouble(5)-tr.getDouble(7))>.5||Math.abs(tr.getDouble(0)-tr.getDouble(6))>.5||tr.getDouble(2)<=tr.getDouble(0)||tr.getDouble(5)<=tr.getDouble(1))throw Error('展示槽位旋转、翻转或透视变形，不能自动替换');}
+          }
+          var slotOriginal=layer;executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);layer=t.doc.activeLayer;
+          if(layer.id===slotOriginal.id||layer.parent.id!==group.id)throw Error('未创建独立展示智能对象');
+          layer.name='[AI-Shoe] '+slotOriginal.name;slotOriginal.visible=false;
+          var desc=new ActionDescriptor();desc.putPath(c('null'),f);executeAction(s('placedLayerReplaceContents'),desc,DialogModes.NO);
+          var b=bounds(layer),frac=job.fraction,box=job.targetBox;
+          if(!job.sourceSize||Math.abs(((b[2]-b[0])/(b[3]-b[1]))/(job.sourceSize[0]/job.sourceSize[1])-1)>.01)throw Error('展示槽位存在非等比缩放或裁切，已停止避免变形');
+          var pw=(frac[2]-frac[0])*(b[2]-b[0]),pht=(frac[3]-frac[1])*(b[3]-b[1]);
+          if(pw<=0||pht<=0)throw Error('素材主体框无效');
+          var scale=Math.min((box[2]-box[0])/pw,(box[3]-box[1])/pht)*100;
+          layer.resize(scale,scale,AnchorPosition.MIDDLECENTER);b=bounds(layer);
+          layer.translate(UnitValue((box[0]+box[2])/2-b[0]-(frac[0]+frac[2])/2*(b[2]-b[0]),'px'),UnitValue((box[1]+box[3])/2-b[1]-(frac[1]+frac[3])/2*(b[3]-b[1]),'px'));
+          if(frame)frame.visible=false;
         }
-        if(hasSlot&&color)rows.push({id:g.id,name:g.name,color:color,slots:slots,bounds:bounds(g)});
-        walk(g.layers);
-      }}
-      walk(d.layers);rows.sort(function(x,y){return x.bounds[1]-y.bounds[1]});
-      if(!rows.length)throw Error('产品展示智能对象内未找到“颜色文字 + 1/2/3智能对象”展示行');
-      t.productDisplayRows=rows;return {documentId:d.id,rows:rows,width:d.width.as('px'),height:d.height.as('px')};
+        if(t.displayScope==='row'){row.error='本行已回写，禁止重复执行';return {rowId:row.id,layerId:row.id,slots:3,scope:'existing_smart_object_contents'};}
+        actions.saveCopy({documentId:t.doc.id,output:a.contentFile});
+        app.activeDocument=parent;var original=find(parent.layers,t.layerId),target=t.parentTargetId?find(parent.layers,t.parentTargetId):null;
+        if(!target){if(!original)throw Error('外层智能对象不存在');parent.activeLayer=original;executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);target=parent.activeLayer;t.parentTargetId=target.id;original.visible=false;}
+        parent.activeLayer=target;var pd=new ActionDescriptor();pd.putPath(c('null'),new File(a.contentFile));executeAction(s('placedLayerReplaceContents'),pd,DialogModes.NO);target.visible=true;
+        row.error='本行已回写，禁止重复执行';
+        return {rowId:row.id,layerId:target.id,slots:3,contentFile:a.contentFile};
+      }catch(e){var errors=[];try{app.activeDocument=t.doc;t.doc.activeHistoryState=ih;}catch(ie){errors.push(ie.message);}try{app.activeDocument=parent;parent.activeHistoryState=ph;}catch(pe){errors.push(pe.message);}t.parentTargetId=previous;if(errors.length){t.recoveryBlocked=true;throw Error(e.message+'；回滚失败，任务锁定：'+errors.join('；'));}throw e;}
+      finally{app.activeDocument=parent;}
     },
     applyVisionRegion:function(a){
       var t=smartTask(a.id);if(!t)throw Error('内部任务已失效');
@@ -243,11 +338,25 @@ var AI_Shoe_CEP = (function () {
       var rt=regionTasks[a.id];var box=rt?rt.box:t.box;if(!box)throw Error('内部任务已失效');
       if(a.fullCanvas){if(!a.canvasSize||a.canvasSize[0]!==t.doc.width.as('px')||a.canvasSize[1]!==t.doc.height.as('px'))throw Error('完整画布尺寸不一致');box=[0,0,a.canvasSize[0],a.canvasSize[1]];}
       var previousTargetId=t.parentTargetId;
+      var previousPatchGroups=t.patchGroupIds||[],newPatchGroups=[];
       app.activeDocument=t.parent;var parentHistory=t.parent.activeHistoryState;
       app.activeDocument=t.doc;var internalHistory=t.doc.activeHistoryState;
       app.activeDocument=t.doc;
       try{
-        actions.applyPreview({documentId:t.doc.id,layerId:t.layerId,id:a.id,box:box,output:a.output,name:a.name});
+        if(a.patches&&a.patches.length){
+          for(var pi=0;pi<a.patches.length;pi++){
+            var patch=a.patches[pi];
+            if(!patch.box||!patch.output||!patch.name)throw Error('分层贴片信息不完整');
+            var placed=actions.applyPreview({documentId:t.doc.id,layerId:t.layerId,id:a.id,box:patch.box,output:patch.output,name:patch.name});
+            newPatchGroups.push(placed.groupId);
+          }
+        }else{
+          var placedSingle=actions.applyPreview({documentId:t.doc.id,layerId:t.layerId,id:a.id,box:box,output:a.output,name:a.name});
+          if(placedSingle)newPatchGroups.push(placedSingle.groupId);
+        }
+        // Hide only groups tracked by this task. History rollback restores them
+        // if saving or replacing the parent fails; original artwork stays intact.
+        for(var gi=0;gi<previousPatchGroups.length;gi++){var oldPatch=find(t.doc.layers,previousPatchGroups[gi]);if(oldPatch)oldPatch.visible=false;}
         if(t.roleMarkers){for(var mi=0;mi<t.roleMarkers.length;mi++){var marker=find(t.doc.layers,t.roleMarkers[mi].id);if(!marker)throw Error('主次推提示图层已变化，请重新准备任务');marker.visible=!a.hideRoleMarkers;}}
         actions.saveCopy({documentId:t.doc.id,output:a.contentFile});
         app.activeDocument=t.parent;documentFor(t.parent.id,true);t.parent.activeLayer=find(t.parent.layers,t.layerId);
@@ -272,6 +381,7 @@ var AI_Shoe_CEP = (function () {
         var desc=new ActionDescriptor();desc.putPath(c('null'),new File(a.contentFile));executeAction(s('placedLayerReplaceContents'),desc,DialogModes.NO);
         target.visible=true; t.parent.activeLayer=target;
         try { app.refresh(); } catch(ignoreRefresh) {}
+        t.patchGroupIds=newPatchGroups;
         return {layerId:target.id,originalLayerId:t.layerId,visible:target.visible,documentId:t.parent.id,contentFile:a.contentFile};
       }catch(e){
         var rollbackErrors=[];
@@ -389,6 +499,7 @@ var AI_Shoe_CEP = (function () {
         var sourceBounds=bounds(image.activeLayer);
         var result=image.activeLayer.duplicate(d,ElementPlacement.PLACEATBEGINNING);image.close(SaveOptions.DONOTSAVECHANGES);image=null;app.activeDocument=d;
         group=d.layerSets.add();group.name=a.name;group.blendMode=BlendMode.NORMAL;result.move(group,ElementPlacement.INSIDE);
+        result.name=(a.name||'[AI-Shoe] 换鞋结果')+' · 鞋部贴片';
         var rb=bounds(result);result.translate(UnitValue(b[0]+sourceBounds[0]-rb[0],'px'),UnitValue(b[1]+sourceBounds[1]-rb[1],'px'));
         if(t.channel)groupMask(d,group,d.channels.getByName(t.channel));return {groupId:group.id};
       }catch(e){if(group)group.remove();throw e;}finally{if(image)image.close(SaveOptions.DONOTSAVECHANGES);app.activeDocument=d;}

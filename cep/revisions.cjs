@@ -8,7 +8,7 @@ function createRevisions({api,vision,host,root}) {
   async function compose(p,r,preview,folder){
     const all=regions(p),chosen=all.filter(x=>x===r||x.written);
     if(chosen.some(x=>!x.visionMask||!x.preview||x.protection.sourceFile!==r.protection.sourceFile))throw Error('已有结果或原始画布不完整，禁止覆盖');
-    const out=await vision.request({action:'compose_parent',source:r.protection.sourceFile,output:path.join(folder,'full-composite.png'),allowPartial:false,requireRoles:!!p.dualRole,transparent:!!p.dualRole,protectedMarkers:p.dualRole?(r.protection.roleMarkers||[]):[],protectionRegions:all.map(x=>({box:x.exportBox,mask:x.visionMask,role:x.role})),regions:chosen.map((x,i)=>({id:x.id,role:x.role,written:!!x.written,box:x.exportBox,mask:x.visionMask,generated:x===r?preview:x.preview,output:path.join(folder,'patch-'+i+'.png')}))});
+    const out=await vision.request({action:'compose_parent',source:r.protection.sourceFile,output:path.join(folder,'full-composite.png'),allowPartial:false,requireRoles:!!p.dualRole,transparent:!!p.dualRole,finalizeRoleMarkers:!!p.dualRole&&chosen.length===all.length&&!(p.detectionWarnings&&p.detectionWarnings.length&&p.candidateReview!=='dismissed'),protectedMarkers:p.dualRole?(r.protection.roleMarkers||[]):[],protectionRegions:all.map(x=>({box:x.exportBox,mask:x.visionMask,role:x.role})),regions:chosen.map((x,i)=>({id:x.id,role:x.role,written:!!x.written,box:x.exportBox,mask:x.visionMask,generated:x===r?preview:x.preview,output:path.join(folder,'patch-'+i+'.png')}))});
     if(!out.output||out.rejected&&out.rejected.length||!out.regions||chosen.some(x=>!out.regions.some(y=>y.id===x.id)))throw Error('合成校验未完整通过，保留当前版本');
     return out;
   }
@@ -38,7 +38,7 @@ function createRevisions({api,vision,host,root}) {
     const all=regions(p),hideRoleMarkers=!!p.dualRole&&all.every(x=>x===r||x.written)&&!(p.detectionWarnings&&p.detectionWarnings.length&&p.candidateReview!=='dismissed');
     v.status='applying';record(v);
     let result;
-    try{result=await host('applySmart',{id:r.id,documentId:r.documentId,layerId:r.layerId,output:composition.output,contentFile:path.join(outputDir,'content.psb'),hideRoleMarkers,fullCanvas:true,canvasSize:composition.size,name:'[AI-Shoe] '+r.product.sku+' '+r.product.color});}
+    try{result=await host('applySmart',{id:r.id,documentId:r.documentId,layerId:r.layerId,output:composition.output,patches:p.dualRole?composition.regions.map(patch=>{const x=all.find(x=>x.id===patch.id);return {output:patch.output,box:patch.box,name:'[AI换鞋] '+x.role+' · '+x.product.sku+' · '+x.product.color+' · 区域'+(x.slot||1)};}):null,contentFile:path.join(outputDir,'content.psb'),hideRoleMarkers,fullCanvas:true,canvasSize:composition.size,name:'[AI-Shoe] '+r.product.sku+' '+r.product.color});}
     catch(e){v.status='candidate';v.applyError=e.message;record(v);throw e;}
     r.revisionHistory=r.revisionHistory||[];r.revisionHistory.push({preview:r.preview,composition:r.composition,written:!!r.written,replacedAt:new Date().toISOString()});
     r.preview=v.preview;r.composition=composition;r.writeResult=result;r.written=true;r.previewValidation='valid';r.phase='written';r.status='新版本已回写，待画面验收';r.revisionCandidate=null;

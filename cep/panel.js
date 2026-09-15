@@ -141,7 +141,14 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     // for each displayed row.
     const skuProducts=state.products.filter(p=>p.sku.trim()===state.targetSku),ordered=[];
     const seen=new Set();for(const p of skuProducts)if(!seen.has(p.id)){seen.add(p.id);ordered.push(p);}
-    if(t.displayRows.length===ordered.length&&ordered.length>0){t.displayRows.forEach((row,i)=>{if(!row.productId)row.productId=ordered[i].id;});}
+    if(ordered.length>0){t.displayRows.forEach((row,i)=>{
+      if(row.productId)return;
+      // Directly scanned display rows are separate tasks named .../1, .../2,
+      // .../3. Use that stable template order before falling back to a
+      // single-task row order.
+      const m=String(t.name||'').match(/\/(\d+)\s*$/);const n=m?Number(m[1])-1:i;
+      if(n>=0&&n<ordered.length)row.productId=ordered[n].id;
+    });}
     for(const row of t.displayRows){
       if(row.written)continue;
       try{
@@ -323,7 +330,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
           output=composed.output;
         }else if(all.length!==1)throw Error('多区域任务缺少蒙版，禁止整体覆盖');
         const hideRoleMarkers=!!t.dualRole&&complete.length===all.length&&!hasUnreviewedCandidates(parent);
-        const result=await host('applySmart',{id:complete[0].id,documentId:t.documentId,layerId:t.layerId,output,contentFile:path.join(dir,t.id+'-'+Date.now()+'-content.psb'),hideRoleMarkers,fullCanvas:!!composed,canvasSize:composed&&composed.size,name:'[AI-Shoe] '+t.product.sku+' '+t.product.color});
+        const result=await host('applySmart',{id:complete[0].id,documentId:t.documentId,layerId:t.layerId,output,patches:t.dualRole&&composed?composed.regions.map(p=>{const r=complete.find(x=>x.id===p.id);return {output:p.output,box:p.box,name:'[AI换鞋] '+r.role+' · '+r.product.sku+' · '+r.product.color+' · 区域'+r.slot};}):null,contentFile:path.join(dir,t.id+'-'+Date.now()+'-content.psb'),hideRoleMarkers,fullCanvas:!!composed,canvasSize:composed&&composed.size,name:'[AI-Shoe] '+t.product.sku+' '+t.product.color});
         documentWrites++;
         for(const x of complete.filter(x=>!x.written)){x.writeResult=result;x.composition=composed;x.written=true;x.phase='written';x.status='已回写，待画面验收';written++;}
         if(parent){parent.markersHidden=hideRoleMarkers;parent.needsFinalize=false;}
