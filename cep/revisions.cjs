@@ -1,7 +1,6 @@
 const fs=require('fs'),path=require('path'),crypto=require('crypto');
-const evidence=require('./shoe-evidence.cjs');
+const generation=require('./auto-generation.cjs');
 function createRevisions({api,vision,host,root}) {
-  const cacheDir=path.join(root,'reference-profiles');
   const hash=f=>crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
   const regions=p=>p.children||[p];
   function fingerprint(r){return JSON.stringify({input:hash(r.input),source:hash(r.protection.sourceFile),mask:hash(r.visionMask),box:r.exportBox,role:r.role,product:r.product,refs:[r.material.cutout].concat(r.material.references).map(hash)});}
@@ -34,9 +33,8 @@ function createRevisions({api,vision,host,root}) {
       else{
         const prompt='第一张是换鞋前的原始局部图，第二张是同坐标黑白蒙版，仅白色鞋位允许修改，后面是目标鞋参考图。将蒙版内 '+(r.shoeCount||1)+' 只鞋替换为 '+r.product.sku+' '+r.product.color+'（'+r.role+'）。必须保留原图画布尺寸和1:1比例、逐只鞋的位置、左右脚、鞋尖方向、透视、大小及前后遮挡；严格遵循参考鞋款、配色、Logo和纹理。鞋面、鞋头、鞋侧和后跟的品牌 Logo/字标必须按对应角度参考图还原，保持正确拼写、方向、位置、大小、浮雕或凹陷质感与透视；禁止乱码、镜像、重复、移位或生成不存在的字样，禁止把后跟Logo放到鞋侧或把鞋侧Logo放到鞋头。鞋舌提拉环和后跟提拉环（pull tab）必须先擦除原提拉环，不能保留与目标款不符的旧颜色或纹理，目标拉环本身为红色时红色合法，再按目标鞋素材重绘真实的数量、位置、连接关系、尺寸、朝向、颜色、边缘包缝和织带纹理；目标鞋无提拉环时禁止新增，有提拉环时禁止漏掉、复制或移位，禁止把提拉环误当作鞋带、鞋舌或另一只鞋。其他人物、鞋、腿、袜子、文字和背景保持不变，禁止把蒙版画入输出。此次重点：'+reason+'。补充要求：'+note;
         const edit={...r,input:copies[0],visionMask:copies[1],material:{cutout:copies[2],references:copies.slice(3)}};
-        const context=await evidence.prepare({api,task:edit,cacheDir});v.shoeEvidence=context;
-        v.status='generating';record(v);v.preview=await api.generate(copies[0],[copies[1],...edit.referencePlan.files],prompt+evidence.instructions(context),{taskId:r.id+'-'+v.id,aspectRatio:'1:1',validateAspect:true,maxAttempts:1});
-        v.detailReview=await evidence.review({api,task:edit,context,output:v.preview});evidence.assertPassed(v.detailReview,'raw');
+        v.status='generating';record(v);v.preview=await generation.run({api,task:edit,prompt,maskFirst:true,options:{taskId:r.id+'-'+v.id,aspectRatio:'1:1',validateAspect:true},record:log=>{v.generation=log;record(v);}});
+
       }
       if(fingerprint(r)!==v.fingerprint||r.preview!==v.basePreview)throw Error('输入或当前版本已经变化，请重新核对');
       v.outputDiagnosis=await vision.request({action:'diagnose_result',stage:'local',source:copies[0],generated:v.preview,mask:v.refinedMask||copies[1]});
@@ -52,13 +50,7 @@ function createRevisions({api,vision,host,root}) {
     const outputDir=fs.mkdtempSync(path.join(v.folder,'apply-'));
     const composition=await compose(p,r,v.preview,outputDir,v.refinedMask);
     const all=regions(p),hideRoleMarkers=!!p.dualRole&&all.every(x=>x===r||x.written)&&!(p.detectionWarnings&&p.detectionWarnings.length&&p.candidateReview!=='dismissed');
-    for(const item of composition.regions){
-      const original=all.find(x=>x.id===item.id);
-      if(original.protection&&original.protection.sceneType==='shoe_structure')continue;
-      const checked={...original,preview:original===r?v.preview:original.preview,visionMask:original===r?(v.refinedMask||r.visionMask):original.visionMask};
-      await evidence.gate({api,vision,task:checked,composition,cacheDir});
-      v.writebackReviews=v.writebackReviews||{};v.writebackReviews[item.id]=checked.shoeReviews;
-    }
+    v.semanticReview='not_performed';
     v.status='applying';record(v);
     let result;
     try{result=await host('applySmart',{id:r.id,documentId:r.documentId,layerId:r.layerId,output:composition.output,patches:p.dualRole?composition.regions.map(patch=>{const x=all.find(x=>x.id===patch.id);return {output:patch.output,box:patch.box,name:'[AI换鞋] '+x.role+' · '+x.product.sku+' · '+x.product.color+' · 区域'+(x.slot||1)};}):null,contentFile:path.join(outputDir,'content.psb'),hideRoleMarkers,fullCanvas:true,canvasSize:composition.size,name:'[AI-Shoe] '+r.product.sku+' '+r.product.color});}

@@ -1,38 +1,17 @@
 'use strict';
-const evidence=require('./shoe-evidence.cjs');
-const routing=require('./detail-routing.cjs');
-const path=require('path');
-// All retries restart from the original input. Never use a rejected output as input.
-async function run({api,vision,workDir,cacheDir,task,prompt,maskFirst,options,record=()=>{}}){
- const log={schemaVersion:1,attempts:[],status:'preparing'};
+const references=require('./reference-plan.cjs');
+const INLINE_INSTRUCTIONS='\n【生成前的图像理解】请在本次生图中先逐只辨认原图鞋的位置、数量、鞋头鞋跟方向、透视和遮挡，判断实际可见的内侧、外侧、鞋面及鞋底；一只鞋可同时显示多个面，不得用画面左右猜左右脚。随后逐只对应目标参考的可见面，核对鞋面拼接、鞋头、鞋底分区及纹路、Logo和拉环，再完成替换。原图只提供姿态和遮挡，目标参考提供款式和配色；不同角度的部件参考仅用于对应部件，不改变整鞋姿态。Logo是否存在以目标对应面为准，目标内侧有Logo也应保留，禁止跨侧复制装饰；拉环颜色以目标为准，不沿用旧色，也不一律禁止红色。保持每只鞋位置、尺度、朝向及遮挡，不镜像、不旋转成参考角度。输出前对照上述项目检查，最终只返回生成图片，不返回JSON、说明文字或对比拼图。';
+async function run({api,task,prompt,maskFirst=false,options={},record=()=>{}}){
+ const log={schemaVersion:2,analysis:'inline_prompt_only',semanticReview:'not_performed',attempts:[],status:'preparing'};
  task.autoGeneration=log;record(log);
  try{
-  if(typeof api.analyze!=='function')throw Error('Image analysis adapter unavailable');
-  const context=await evidence.prepare({api,task,cacheDir});
-  log.view=context.scene;const plan=task.referencePlan;log.references=plan;record(log);
-  const inputRefs=(maskFirst?[task.visionMask]:[]).concat(plan.files);
-  let correction='',detail=null;
-  for(let attempt=1;attempt<=2;attempt++){
-   const row={attempt,status:'generating'};log.attempts.push(row);record(log);
-   if(detail){
-    row.strategy='detail';row.detail=detail;
-    const mask=path.join(workDir,'detail-mask.png');
-    const common={source:task.input,mask:task.visionMask,box:detail.box};
-    await vision.request({...common,action:'prepare_detail',output:mask});
-    row.rawOutput=await api.generate(task.input,[mask,...detail.references.map(e=>e.file)],
-     '第一张是原始场景，第二张是本次编辑蒙版，其余是目标部件参考。仅重绘白色区域中的'+detail.part+'，保持原场景位置、透视和遮挡。黑色区域不得修改。'+correction,{...options,maxAttempts:1});
-    row.output=path.join(workDir,'detail-composed.png');
-    await vision.request({...common,action:'compose_detail',base:log.attempts[0].output,generated:row.rawOutput,output:row.output});
-   }else{row.strategy='full';row.output=await api.generate(task.input,inputRefs,prompt+evidence.instructions(context)+correction, {...options,maxAttempts:1});}
-   row.status='checking';record(log);
-   const check=await evidence.review({api,task,context,output:row.output});
-   row.check=check;row.status=check.decision;record(log);
-   if(check.decision==='pass'&&check.confidence>=.85){task.detailReview=check;log.status='accepted';record(log);return row.output;}
-   if(check.decision!=='retry'||check.confidence<.85||!check.reasons.length)break;
-   detail=vision&&workDir?routing.select(check,task,plan.entries):null;
-   correction='\n上次候选存在以下可见问题。本次仍从原始输入重新生成，保持原任务约束，只针对这些问题改进：'+check.reasons.join('；').slice(0,2000);
-  }
-  throw Error('自动验收未通过；候选文件保留，已停止自动重生成');
- }catch(e){log.status='blocked';log.error=e.message;record(log);throw e;}
+  const plan=references.plan(task.material,{view:'unknown'});
+  task.referencePlan=plan;log.references=plan;
+  if(maskFirst&&!task.visionMask)throw Error('缺少编辑蒙版');
+  const refs=(maskFirst?[task.visionMask]:[]).concat(plan.files);
+  const row={attempt:1,strategy:'full',status:'generating'};log.attempts.push(row);record(log);
+  row.output=await api.generate(task.input,refs,prompt+INLINE_INSTRUCTIONS,{...options,maxAttempts:1});
+  row.status='received';log.status='received';record(log);return row.output;
+ }catch(e){log.status='failed';log.error=e.message;record(log);throw e;}
 }
-module.exports={run};
+module.exports={run,INLINE_INSTRUCTIONS};

@@ -283,8 +283,6 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     return writes;
   }
   function matchAll(){state.tasks.forEach(t=>{if(t.region)return;t.material=null;if(!t.product)return;try{t.material=flow.matchMaterial(state.materials,t.product);if(t.dualRole){t.roleMaterials={};for(const role of ['主推','次推'])t.roleMaterials[role]=flow.matchMaterial(state.materials,t.roleProducts[role]);}t.status=t.dualRole?'待读取内部主推／次推标注':'待处理';}catch(e){t.material=null;t.status='已跳过：'+e.message;}});}
-  function shoeEvidence(){return (typeof require==='function'?require:window.cep_node.require)(path.join(folder,'shoe-evidence.cjs'));}
-  function evidenceCache(){return path.join(os.homedir(),'Pictures','AI-Shoe-Reference-Profiles');}
   function render(){
     $('batch').disabled=state.busy;
     $('batch').textContent=batchStage?'正在处理…':state.busy?'请等待当前操作…':'开始批量换鞋';
@@ -400,7 +398,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         t.preview=await api.generate(t.input,[t.visionMask].concat(t.referencePlan.files),structurePrompt,genOpts);
       }else{
         const detailDir=path.join(dir,t.id+'-detail');fs.mkdirSync(detailDir,{recursive:true});
-        t.preview=await req(path.join(folder,'auto-generation.cjs')).run({api,vision,workDir:detailDir,cacheDir:evidenceCache(),task:t,prompt,maskFirst:!!t.dualRole,options:genOpts,
+        t.preview=await req(path.join(folder,'auto-generation.cjs')).run({api,vision,workDir:detailDir,task:t,prompt,maskFirst:!!t.dualRole,options:genOpts,
           record:log=>fs.writeFileSync(path.join(dir,t.id+'-auto-generation.json'),JSON.stringify(log,null,2))});
       }
       t.generationState='received';t.previewValidation='unvalidated';t.phase='unvalidated_preview';t.status='已取得结果，待本地验证';
@@ -457,13 +455,8 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
           if(!complete.some(r=>!r.written)&&!(parent&&parent.needsFinalize))continue;
           output=composed.output;
         }else if(all.length!==1)throw Error('多区域任务缺少蒙版，禁止整体覆盖');
-        // Gate every chosen region, including cached and already-written previews
-        // included in this new composite. No automatic generation on rejection.
-        for(const r of complete){
-          if(r.protection&&r.protection.sceneType==='shoe_structure')continue;
-          try{await shoeEvidence().gate({api,vision,task:r,composition:composed,cacheDir:evidenceCache()});r.qualityError=null;r.qualityFailureStage=null;}
-          catch(e){r.qualityError=e.message;r.status='款式验收未通过：'+e.message;throw e;}
-        }
+        // Semantic JSON review is disabled; pixel/composition protections remain.
+        for(const r of complete){r.qualityError=null;r.qualityFailureStage=null;r.semanticReview='not_performed';}
         const hideRoleMarkers=!!t.dualRole&&complete.length===all.length&&!hasUnreviewedCandidates(parent);
         const result=await host('applySmart',{id:complete[0].id,documentId:t.documentId,layerId:t.layerId,output,patches:t.dualRole&&composed?composed.regions.map(p=>{const r=complete.find(x=>x.id===p.id);return {output:p.output,box:p.box,name:'[AI换鞋] '+r.role+' · '+r.product.sku+' · '+r.product.color+' · 区域'+r.slot};}):null,contentFile:path.join(dir,t.id+'-'+Date.now()+'-content.psb'),hideRoleMarkers,fullCanvas:!!composed,canvasSize:composed&&composed.size,name:'[AI-Shoe] '+t.product.sku+' '+t.product.color});
         documentWrites++;
