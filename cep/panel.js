@@ -156,8 +156,15 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
   async function prepareDisplay(t){
     if(!state.targetSku)throw Error('请先选择新货号');
     const svc=displayService(),materials=await svc.loadMaterials($('libraryPath').value.trim(),state.targetSku);
-    if(t.displayRows){t.displayMaterials=materials;t.status='展示素材已重新读取';render();return;}
+    if(t.displayRows&&t.displayRows.some(r=>r.written)){t.displayMaterials=materials;t.status='保留已完成行，展示素材已重新读取';render();return;}
     const inspection=await host('inspectProductDisplay',t);
+    for(let i=0;i<inspection.rows.length;i++){
+      try{
+        if(inspection.rows[i].slots.some(s=>s.fitMode==='source_subject_pending')){
+          inspection.rows[i]=await svc.resolveSubjectFrames(inspection.rows[i],$('libraryPath').value.trim());
+        }
+      }catch(e){inspection.rows[i].error='自动定位展示范围失败：'+e.message;}
+    }
     const skuProducts=state.products.filter(p=>p.sku.trim()===state.targetSku);
     const uniqueProducts=[];const seenProducts=new Set();
     for(const p of skuProducts){if(!seenProducts.has(p.id)){seenProducts.add(p.id);uniqueProducts.push(p);}}
@@ -166,8 +173,17 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       const exact=svc.productsForRow(skuProducts,state.targetSku,row);
       const rowNumber=String(t.name||'').match(/\/(\d+)\s*$/);
       const orderedIndex=t.displayScope==='row'&&rowNumber?Number(rowNumber[1])-1:index;
-      const selected=exact.length===1?exact[0]:((byDisplayOrder||(t.displayScope==='row'&&rowNumber))?uniqueProducts[orderedIndex]:null);
-      return {...row,productId:selected?selected.id:'',status:row.error||(selected?(exact.length===1?'已按颜色自动匹配':'已按展示顺序自动绑定目标款色'):'待匹配目标款色')};
+      let selected=null,status='';
+      if(exact.length===1){
+        const titleMatch=svc.colorKey(exact[0].color)===svc.colorKey(row.color);
+        if(titleMatch){selected=exact[0];status='已按颜色自动匹配';}
+        else status='标题不匹配，请明确选择目标款色';
+      }else if((byDisplayOrder||(t.displayScope==='row'&&rowNumber))&&uniqueProducts[orderedIndex]){
+        selected=uniqueProducts[orderedIndex];status='已按展示顺序自动绑定目标款色';
+      }else{
+        status='待匹配目标款色';
+      }
+      return {...row,productId:selected?selected.id:'',status:row.error||status};
     });
     t.displayMaterials=materials;
     t.status='展示行已读取；颜色不匹配的行请选择目标款色';render();

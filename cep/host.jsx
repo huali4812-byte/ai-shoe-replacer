@@ -16,6 +16,29 @@ var AI_Shoe_CEP = (function () {
     for (k in v) if (v.hasOwnProperty(k)) a.push(json(k) + ':' + json(v[k]));
     return '{' + a.join(',') + '}';
   }
+  function sameBox(a,b,tol){
+    if(!a||!b||a.length!==4||b.length!==4)return false;
+    for(var i=0;i<4;i++)if(typeof a[i]!=='number'||typeof b[i]!=='number'||!isFinite(a[i])||!isFinite(b[i])||Math.abs(a[i]-b[i])>tol)return false;
+    return true;
+  }
+  function identityDisplayWarp(warp){
+    try{
+      var style=typeIDToStringID(warp.getEnumerationValue(s('warpStyle')));
+      if(style==='warpNone')return true;
+      if(style!=='warpCustom')return false;
+      var keys=['warpValue','warpPerspective','warpPerspectiveOther'];
+      for(var i=0;i<keys.length;i++){var v=warp.getDouble(s(keys[i]));if(!isFinite(v)||Math.abs(v)>0.000001)return false;}
+      if(warp.getInteger(s('uOrder'))!==4||warp.getInteger(s('vOrder'))!==4)return false;
+      var b=warp.getObjectValue(s('bounds'));
+      function num(d,k){return d.getType(s(k))===DescValueType.UNITDOUBLE?d.getUnitDoubleValue(s(k)):d.getDouble(s(k));}
+      var x=num(b,'left'),y=num(b,'top'),w=num(b,'right')-x,h=num(b,'bottom')-y;
+      if(!isFinite(x)||!isFinite(y)||!isFinite(w)||!isFinite(h)||w<=0||h<=0)return false;
+      var pts=warp.getObjectValue(s('customEnvelopeWarp')).getList(s('meshPoints'));
+      if(pts.count!==16)return false;
+      for(i=0;i<16;i++){var p=pts.getObjectValue(i),px=num(p,'horizontal'),py=num(p,'vertical');if(!isFinite(px)||!isFinite(py)||Math.abs(px-(x+(i%4)*w/3))>0.0001||Math.abs(py-(y+Math.floor(i/4)*h/3))>0.0001)return false;}
+      return true;
+    }catch(e){return false;}
+  }
   function documentFor(id, requireWorking) {
     if (!app.documents.length) throw Error('请先打开 PSB');
     var d = app.activeDocument;
@@ -243,7 +266,19 @@ var AI_Shoe_CEP = (function () {
           if(slots.length){
             if(colors.length!==1)error='颜色标题必须唯一，实际 '+colors.length;
             if(slots.length!==3||!views.pair||!views.back||!views.sole)error='需 pair/back/sole 三个智能对象';
-            for(var k=0;k<slots.length;k++){var num=({pair:'1',back:'2',sole:'3'})[slots[k].view],f=frames[num];if(!f){slots[k].targetBox=slots[k].bounds;slots[k].fitMode='existing_canvas';}else{slots[k].targetBox=f.box;slots[k].frameId=f.id;slots[k].fitMode='subject_frame';}}
+            for(var k=0;k<slots.length;k++){var num=({pair:'1',back:'2',sole:'3'})[slots[k].view],f=frames[num];if(!f){
+              var sourceName=String(slots[k].name).match(/^([^_]+)_(.+)_bd_(pair|back|sole)$/i);
+              if(sourceName){
+                var ref=new ActionReference();ref.putIdentifier(s('layer'),slots[k].id);var desc=executeActionGet(ref);
+                if(!desc.hasKey(s('smartObjectMore')))throw Error('缺少原素材变换信息');
+                var more=desc.getObjectValue(s('smartObjectMore'));
+                if(!more.hasKey(s('transform')))throw Error('缺少原素材画布坐标');
+                var tr=more.getList(s('transform'));
+                if(tr.count!==8||Math.abs(tr.getDouble(1)-tr.getDouble(3))>.5||Math.abs(tr.getDouble(2)-tr.getDouble(4))>.5||Math.abs(tr.getDouble(5)-tr.getDouble(7))>.5||Math.abs(tr.getDouble(0)-tr.getDouble(6))>.5||tr.getDouble(2)<=tr.getDouble(0)||tr.getDouble(5)<=tr.getDouble(1))throw Error('原素材旋转、翻转或透视变形，不能自动恢复范围');
+                slots[k].sourceCanvas=[tr.getDouble(0),tr.getDouble(1),tr.getDouble(4),tr.getDouble(5)];
+                slots[k].sourceProduct={sku:sourceName[1],color:sourceName[2]};slots[k].fitMode='source_subject_pending';
+              }else{error='产品展示智能对象 '+slots[k].view+' 缺少对应范围框';slots[k].fitMode='missing_frame';}
+            }else{slots[k].targetBox=f.box;slots[k].frameId=f.id;slots[k].fitMode='subject_frame';}}
             rows.push({id:g.id,name:g.name,color:colors.length===1?colors[0].text:'',colorLayerId:colors.length===1?colors[0].id:null,slots:slots,bounds:bounds(g),error:error});
           }else walk(g.layers);
         }}
@@ -342,14 +377,23 @@ var AI_Shoe_CEP = (function () {
       try{
         for(var i=0;i<a.plan.slots.length;i++){
           var job=a.plan.slots[i],expected=null;for(var j=0;j<row.slots.length;j++)if(row.slots[j].id===job.id)expected=row.slots[j];
-          if(!expected||expected.fitMode!==job.fitMode||json(expected.targetBox)!==json(job.targetBox))throw Error('展示槽位计划不一致');
+          if(!expected)throw Error('展示槽位计划不一致');
+          if(expected.fitMode==='source_subject_pending'&&job.fitMode==='source_subject'){
+            var sf=job.sourceFraction,cb=expected.sourceCanvas;
+            if(!sf||sf.length!==4||!job.sourceEvidence||sf[0]<0||sf[1]<0||sf[2]>1||sf[3]>1||sf[2]<=sf[0]||sf[3]<=sf[1])throw Error('旧款主体证据无效');
+            var derived=[cb[0]+(cb[2]-cb[0])*sf[0],cb[1]+(cb[3]-cb[1])*sf[1],cb[0]+(cb[2]-cb[0])*sf[2],cb[1]+(cb[3]-cb[1])*sf[3]];
+            if(!sameBox(derived,job.targetBox,0.01))throw Error('旧款主体框计划不一致');
+          }else if(expected.fitMode!==job.fitMode||json(expected.targetBox)!==json(job.targetBox))throw Error('展示槽位计划不一致');
           var layer=find(t.doc.layers,job.id),frame=find(t.doc.layers,expected.frameId);
           if(!layer||layer.parent.id!==group.id||layer.kind!==LayerKind.SMARTOBJECT||!layer.visible||(expected.frameId&&(!frame||json(bounds(frame))!==json(expected.targetBox)))||json(bounds(layer))!==json(expected.bounds))throw Error('展示槽位或范围框已变化');
           var f=new File(job.file);if(!f.exists)throw Error('展示素材不存在');
           t.doc.activeLayer=layer;var ref=new ActionReference();ref.putIdentifier(s('layer'),layer.id);var ld=executeActionGet(ref);
           if(ld.hasKey(s('smartObject'))){var so=ld.getObjectValue(s('smartObject'));if(so.hasKey(s('linked'))&&so.getBoolean(s('linked')))throw Error('链接展示素材不自动替换');}
+          if(!ld.hasKey(s('smartObjectMore')))throw Error('展示槽位缺少变换信息');
           if(ld.hasKey(s('smartObjectMore'))){var more=ld.getObjectValue(s('smartObjectMore'));
-            if(more.hasKey(s('warp'))){var warp=more.getObjectValue(s('warp'));if(warp.hasKey(s('warpStyle'))&&typeIDToStringID(warp.getEnumerationValue(s('warpStyle')))!=='warpNone')throw Error('展示槽位有变形，请先确认模板');}
+            if(!more.hasKey(s('transform')))throw Error('展示槽位缺少transform');
+            var checkedTransform=more.getList(s('transform'));for(var ti=0;ti<checkedTransform.count;ti++)if(!isFinite(checkedTransform.getDouble(ti)))throw Error('展示槽位变换坐标无效');
+            if(more.hasKey(s('warp'))){var warp=more.getObjectValue(s('warp'));if(!identityDisplayWarp(warp))throw Error('展示槽位有变形，请先确认模板');}
             if(more.hasKey(s('transform'))){var tr=more.getList(s('transform'));if(tr.count!==8||Math.abs(tr.getDouble(1)-tr.getDouble(3))>.5||Math.abs(tr.getDouble(2)-tr.getDouble(4))>.5||Math.abs(tr.getDouble(5)-tr.getDouble(7))>.5||Math.abs(tr.getDouble(0)-tr.getDouble(6))>.5||tr.getDouble(2)<=tr.getDouble(0)||tr.getDouble(5)<=tr.getDouble(1))throw Error('展示槽位旋转、翻转或透视变形，不能自动替换');}
           }
           var slotOriginal=layer;executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);layer=t.doc.activeLayer;

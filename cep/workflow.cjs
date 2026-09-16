@@ -7,11 +7,30 @@ const { parseWorkbook } = require('./rules.cjs');
 const http = require('http');
 function eagleSearch(keyword){return new Promise((resolve,reject)=>{const req=http.get('http://localhost:41595/api/item/list?limit=200&offset=0&keyword='+encodeURIComponent(keyword),r=>{let b='';r.on('data',x=>b+=x);r.on('end',()=>{try{const j=JSON.parse(b);resolve(j.data||[])}catch(e){reject(Error('Eagle API 返回无效数据'))}})});req.setTimeout(5000,()=>req.destroy(Error('Eagle API 超时')));req.on('error',reject)})}
 function readExcel(file) { return parseWorkbook(fs.readFileSync(file)); }
+function imageDimensions(file) {
+  const b = fs.readFileSync(file);
+  if (b.slice(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) {
+    const w = b.readUInt32BE(16), h = b.readUInt32BE(20);
+    if (w > 0 && h > 0 && w * h <= 40000000) return { width: w, height: h };
+  } else if (b[0] === 0xFF && b[1] === 0xD8) {
+    let pos = 2;
+    while (pos < b.length - 8) {
+      if (b[pos] !== 0xFF) break;
+      const marker = b[pos + 1], len = b.readUInt16BE(pos + 2);
+      if (marker === 0xC0 || marker === 0xC2) {
+        const h = b.readUInt16BE(pos + 5), w = b.readUInt16BE(pos + 7);
+        if (w > 0 && h > 0 && w * h <= 40000000) return { width: w, height: h };
+      }
+      pos += 2 + len;
+    }
+  }
+  throw Error('无法读取图像尺寸或尺寸超过 4000 万像素');
+}
 function decode(file) {
   const b = fs.readFileSync(file);
   let image;
   if (b.slice(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) image = PNG.sync.read(b);
-  else image = jpeg.decode(b,{useTArray:true,maxResolutionInMP:40,maxMemoryUsageInMB:256});
+  else image = jpeg.decode(b,{useTArray:true,maxResolutionInMP:40,maxMemoryUsageInMB:512});
   if (!image.width || !image.height || image.width*image.height > 40000000) throw Error('图像尺寸无效或超过 4000 万像素');
   return image;
 }
@@ -167,4 +186,4 @@ function registerMaterial(root, product, cutout, references) {
   index.materials.push(m);fs.writeFileSync(filename,JSON.stringify(index,null,2));
   return filename;
 }
-module.exports={readExcel,targets,indexLibrary,matchMaterial,validateTask,protect,decode,fingerprint,writeReport,registerMaterial,eagleSearch,skuVariants};
+module.exports={readExcel,targets,indexLibrary,matchMaterial,validateTask,protect,decode,imageDimensions,fingerprint,writeReport,registerMaterial,eagleSearch,skuVariants};

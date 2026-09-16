@@ -23,9 +23,9 @@ const ctx={find:()=>null,documentFor:()=>parent,actions:{openSmartTask(){}},smar
 const inspect=vm.runInNewContext('('+inspectText+')',ctx);
 let r=inspect({});assert.equal(r.rows.length,1);assert.equal(r.rows[0].error,'');assert.equal(r.rows[0].slots[0].view,'pair');assert.equal(ctx.app.activeDocument,parent);
 group.layers.push({...group.layers[0],id:88});assert.match(inspect({}).rows[0].error,/颜色标题必须唯一/);group.layers.pop();
-group.layers.pop();assert.equal(inspect({}).rows[0].slots[2].fitMode,'existing_canvas');
+group.layers.pop();assert.match(inspect({}).rows[0].error,/缺少对应范围框/);
 assert.throws(()=>svc.makePlan({...row,slots:[row.slots[0],row.slots[0],row.slots[2]]},product,entries),/重复/);
-const canvas=svc.makePlan({...row,slots:row.slots.map(s=>({...s,fitMode:'existing_canvas'}))},product,entries);assert.deepEqual(canvas.slots[0].fraction,[0,0,1,1]);
+assert.throws(()=>svc.makePlan({...row,slots:row.slots.map(s=>({...s,fitMode:'missing_frame'}))},product,entries),/不能回退到整画布/);
 fs.appendFileSync(t,'changed');assert.throws(()=>svc.verifyPlan(plan),/发生变化/);
 console.log('PASS: strict colors, complete unique views, alpha geometry, resolution, stale files, internal row inspection and restoration');
 
