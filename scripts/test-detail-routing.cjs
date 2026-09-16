@@ -1,0 +1,10 @@
+const assert=require('assert');const {select}=require('../cep/detail-routing.cjs');
+const task={shoeCount:1,visionMask:'mask'};const refs=[{detail:'logo',file:'logo'}];
+const check={decision:'retry',confidence:.95,geometryCorrect:true,otherPartsCorrect:true,defects:[{part:'logo',visible:true,occluded:false,confidence:.95,box:[.1,.1,.3,.3]}]};
+assert(select(check,task,refs));
+assert.equal(select(check,{...task,dualRole:true},refs),null);
+assert.equal(select(check,task,[]),null);
+assert.equal(select({...check,geometryCorrect:false},task,refs),null);
+for(const box of [[0,0,1,1],[NaN,0,.3,.3],[.3,.3,.1,.1]])assert.equal(select({...check,defects:[{...check.defects[0],box}]},task,refs),null);
+assert.equal(select({...check,defects:[{...check.defects[0],occluded:true}]},task,refs),null);
+console.log('PASS local route requires clear single visible defect, valid coordinates, single shoe and dedicated reference');

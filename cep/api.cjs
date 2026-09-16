@@ -5,6 +5,9 @@ const https = require('https');
 const crypto = require('crypto');
 const { PNG } = require('./vendor/pngjs');
 const jpeg = require('./vendor/jpeg-js');
+const downloadQueue=[]; let activeDownloads=0; const DOWNLOAD_CONCURRENCY=2;
+function queuedDownload(url, timeout, log){return new Promise((resolve,reject)=>{downloadQueue.push({url,timeout,log,resolve,reject});drainDownloads();});}
+function drainDownloads(){while(activeDownloads<DOWNLOAD_CONCURRENCY&&downloadQueue.length){const j=downloadQueue.shift();activeDownloads++;download(j.url,j.timeout,j.log).then(j.resolve,j.reject).finally(()=>{activeDownloads--;drainDownloads();});}}
 function prepareImage(file) {
   const raw=fs.readFileSync(file); if(raw.length<8)return raw;
   try { const p=PNG.sync.read(raw); const max=1024, scale=Math.min(1,max/Math.max(p.width,p.height));
@@ -34,7 +37,7 @@ function request(url, body, headers, timeout, log = ()=>{}) {
   let stage="连接"; log("request_start");
   return new Promise((resolve, reject) => {
     const req = https.request(url, { method: body ? 'POST' : 'GET', headers }, res => {
-      stage="接收响应"; log("response_headers",{status:res.statusCode,requestId:res.headers["x-request-id"]||null});
+      stage="接收响应"; log("response_headers",{status:res.statusCode,requestId:res.headers&&res.headers["x-request-id"]||null});
       const parts = []; let size = 0;
       res.on('data', chunk => {
         size += chunk.length;
@@ -98,23 +101,79 @@ async function generate(original, references, prompt, options = {}) {
   log('payload',{originalBytes:inputBytes,preparedBytes:content.slice(1).reduce((n,p)=>n+Buffer.from(p.image_url.url.split(',')[1],'base64').length,0),requestBytes:Buffer.byteLength(payload),images:content.length-1,model:c.model,requestedAspect});
   console.log('[AI] files='+inputBytes+' bytes, request='+Buffer.byteLength(payload)+' bytes, model='+c.model);
   const headers={'Authorization':'Bearer '+c.key,'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)};
+  // Exact request identity includes endpoint, model, prompt and all image bytes.
+  // Keep signed response URLs in a private local file, never in diagnostics.
+  const recoveryDir=path.join(os.homedir(),'Pictures','AI-Shoe-Results','pending-downloads');
+  fs.mkdirSync(recoveryDir,{recursive:true,mode:0o700});
+  const recoveryFile=path.join(recoveryDir,crypto.createHash('sha256').update(c.base+'\n'+payload).digest('hex')+'.json');
   let response;
-  for(let attempt=1;attempt<=3;attempt++){
+  if(fs.existsSync(recoveryFile)){response=fs.readFileSync(recoveryFile);log('download_response_reused');}
+  const maxAttempts=Number.isInteger(options.maxAttempts)?Math.max(1,Math.min(3,options.maxAttempts)):3;
+  for(let attempt=1;!response&&attempt<=maxAttempts;attempt++){
     try { log('attempt_start',{attempt}); response=await request(c.base+'chat/completions',payload,headers,API_TIMEOUT_MS,log); break; }
     catch(e){
-      const transient=!!e.gatewayUnavailable || /HTTP 502|HTTP 503|HTTP 504|ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|socket hang up/i.test(e.message||'');
+      const transient=!!e.gatewayUnavailable || /HTTP 502|HTTP 503|HTTP 504|ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|socket hang up|network socket disconnected|secure TLS connection was established|Client network/i.test(e.message||'');
       log('attempt_failed',{attempt,transient,error:e.message});
-      if(!transient||attempt===3) throw e;
-      await new Promise(resolve=>setTimeout(resolve,1500*attempt));
+      if(!transient||attempt===maxAttempts) throw e;
+      await new Promise(resolve=>setTimeout(resolve,2000*attempt));
     }
   }
-  const data=JSON.parse(response.toString());
+  let data;
+  const responseText=response.toString('utf8').trim();
+  try { data=JSON.parse(responseText); } catch (e) {
+    const direct=responseText.match(/^data:image\/(?:png|jpeg);base64,([A-Za-z0-9+/=]+)$/i);
+    const markdown=responseText.match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/i);
+    const url=responseText.match(/https?:\/\/[^\s<>"']+/i);
+    const imageUrl=markdown&&markdown[1] || url&&url[0];
+    if(direct) data={choices:[{message:{content:[{text:direct[0]}]}}]};
+    else if(imageUrl) data={choices:[{message:{content:[{text:'![]('+imageUrl.replace(/[),.;]+$/,'')+')'}]}}]};
+    else throw Error('接口返回非JSON且未发现图片链接；原始响应开头：'+responseText.slice(0,120));
+  }
   console.log('[AI] response after '+(Date.now()-started)+' ms');
   const msg=data.choices&&data.choices[0]&&data.choices[0].message, parts=msg&&msg.content; let bytes=null;
-  const arr=Array.isArray(parts)?parts:[{text:parts||''}]; for(const part of arr){const u=part.image_url&& (part.image_url.url||part.image_url);if(typeof u==='string'&&u.startsWith('data:')){bytes=Buffer.from(u.split(',')[1],'base64');break;}if(typeof part.text==='string'){const m=part.text.match(/data:image\/[^;]+;base64,([A-Za-z0-9+/=]+)/);if(m){bytes=Buffer.from(m[1],'base64');break;}const link=part.text.match(/!\[[^\]]*\]\((https?:\/\/[^)]+)\)/)||part.text.match(/https?:\/\/[^\s]+\.(?:png|jpg|jpeg)(?:\?[^\s]*)?/i);if(link){const imageUrl=link[1]||link[0];let last;for(let attempt=1;attempt<=3;attempt++){try{log("download_start",{attempt});bytes=await download(imageUrl,60000,log);break;}catch(e){last=e;const transient=/ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|socket hang up/i.test(e.message||'');log('download_attempt_failed',{attempt,transient,error:e.message});if(!transient||attempt===3)throw e;await new Promise(resolve=>setTimeout(resolve,1000*attempt));}}if(!bytes&&last)throw last;break;}}}
+  const arr=Array.isArray(parts)?parts:[{text:parts||''}]; for(const part of arr){const u=part.image_url&& (part.image_url.url||part.image_url);if(typeof u==='string'&&u.startsWith('data:')){bytes=Buffer.from(u.split(',')[1],'base64');break;}if(typeof part.text==='string'){const m=part.text.match(/data:image\/[^;]+;base64,([A-Za-z0-9+/=]+)/);if(m){bytes=Buffer.from(m[1],'base64');break;}const link=part.text.match(/!\[[^\]]*\]\((https?:\/\/[^)]+)\)/)||part.text.match(/https?:\/\/[^\s]+\.(?:png|jpg|jpeg)(?:\?[^\s]*)?/i);if(link){fs.writeFileSync(recoveryFile,response,{mode:0o600});log('download_response_saved');const imageUrl=link[1]||link[0];let last;const maxDownloadAttempts=5;for(let attempt=1;attempt<=maxDownloadAttempts;attempt++){try{log("download_start",{attempt,maxAttempts:maxDownloadAttempts,timeoutMs:180000,queueConcurrency:DOWNLOAD_CONCURRENCY});bytes=await queuedDownload(imageUrl,180000,log);break;}catch(e){last=e;const transient=/HTTP 408|HTTP 429|HTTP 500|HTTP 502|HTTP 503|HTTP 504|HTTP 525|ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|socket hang up|network socket disconnected/i.test(e.message||'');log('download_attempt_failed',{attempt,maxAttempts:maxDownloadAttempts,transient,error:e.message});if(!transient||attempt===maxDownloadAttempts)throw e;await new Promise(resolve=>setTimeout(resolve,Math.min(30000,2000*Math.pow(2,attempt-1))));}}if(!bytes&&last)throw last;break;}}}
   if(!bytes)throw Error('接口未返回图片内容'); const png=bytes.slice(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])); if(!png&&!(bytes[0]===255&&bytes[1]===216&&bytes[2]===255))throw Error('接口返回内容不是 PNG/JPEG');
   try { const im=png?PNG.sync.read(bytes):jpeg.decode(bytes); log('image_dimensions',{width:im.width,height:im.height,requestedAspect}); if(options.validateAspect){const actual=im.width/im.height, want=+requestedAspect.split(':')[0]/+requestedAspect.split(':')[1]; if(Math.abs(actual/want-1)>0.01) throw Error('接口忽略比例，返回 '+im.width+'x'+im.height+'（要求 '+requestedAspect+'）');} } catch (e) { if(options.validateAspect) throw e; }
-  const folder=path.join(os.homedir(),'Pictures','AI-Shoe-Results');fs.mkdirSync(folder,{recursive:true});const out=path.join(folder,Date.now()+'-'+crypto.randomBytes(4).toString('hex')+(png?'.png':'.jpg'));fs.writeFileSync(out,bytes,{flag:'wx'});log("success",{output:out});return out;
+  const folder=path.join(os.homedir(),'Pictures','AI-Shoe-Results');fs.mkdirSync(folder,{recursive:true});const out=path.join(folder,Date.now()+'-'+crypto.randomBytes(4).toString('hex')+(png?'.png':'.jpg'));fs.writeFileSync(out,bytes,{flag:'wx'});log("success",{output:out});try{fs.unlinkSync(recoveryFile);}catch(_){}return out;
   } catch(e){log("failed",{errorType:e.name,error:e.message||String(e)});throw Error(e.message+"；诊断："+logFile);}
 }
-module.exports = { test, generate };
+async function analyze(files, prompt) {
+  const c=config();
+  const content=[{type:'text',text:prompt}];
+  for(const file of files){
+    const raw=prepareImage(file);
+    content.push({type:'image_url',image_url:{url:'data:'+(raw[0]===137?'image/png':'image/jpeg')+';base64,'+raw.toString('base64')}});
+  }
+  // Text-only response uses the existing authenticated provider; no implicit
+  // provider/model change and no retry on uncertain network completion.
+  const payload=JSON.stringify({model:c.model,messages:[{role:'user',content}],modalities:['text'],extra_body:{google:{response_modalities:['TEXT']}}});
+  let raw, last;
+  for(let attempt=1;attempt<=3;attempt++){
+    try { raw=await request(c.base+'chat/completions',payload,{'Authorization':'Bearer '+c.key,'Content-Type':'application/json'},API_TIMEOUT_MS); break; }
+    catch(e){ last=e; if(attempt===3 || !/ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|network socket disconnected|接口超时/i.test(e.message||'')) throw e; await new Promise(r=>setTimeout(r,Math.min(8000,1000*attempt))); }
+  }
+  if(!raw) throw last||Error('视觉分析请求失败');
+  const data=JSON.parse(raw.toString());
+  const value=data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content;
+  const text=typeof value==='string'?value:Array.isArray(value)?value.filter(p=>p.type==='text').map(p=>p.text).join(''):'';
+  if(!text.trim())throw Error('视觉分析接口未返回JSON文字结果（返回图片或空内容）；当前模型/网关的分析协议尚未兼容，已停止自动验收');
+  const cleaned=text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
+  try { return JSON.parse(cleaned); } catch (firstError) {
+    // Vision gateways occasionally prepend Markdown (for example `!…`) even
+    // when the prompt requests JSON only. Recover the first balanced JSON
+    // object instead of failing every shoe before generation starts.
+    const start=cleaned.indexOf('{');
+    if(start<0) throw Error('视觉分析接口未返回JSON文字结果；分析模型 '+c.model+' 的返回协议不兼容，已停止自动验收');
+    let depth=0,inString=false,escaped=false;
+    for(let i=start;i<cleaned.length;i++) {
+      const ch=cleaned[i];
+      if(inString){ if(escaped) escaped=false; else if(ch==='\\') escaped=true; else if(ch==='"') inString=false; continue; }
+      if(ch==='"'){inString=true;continue;}
+      if(ch==='{') depth++;
+      else if(ch==='}' && --depth===0) return JSON.parse(cleaned.slice(start,i+1));
+    }
+    throw firstError;
+  }
+}
+function analysisIdentity(){const c=config();return crypto.createHash('sha256').update(c.base+'|'+c.model+'|text-v3').digest('hex');}
+module.exports = { test, generate, analyze, analysisIdentity };

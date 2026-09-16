@@ -9,7 +9,7 @@ for(const view of ['pair','back','sole'])for(const kind of ['bd','t'])entries.pu
 const row={id:1,color:product.color,slots:['pair','back','sole'].map((view,i)=>({id:i+2,view,targetBox:[0,0,40,30]}))};
 const plan=svc.makePlan(row,product,entries);assert.equal(plan.slots.length,3);assert.deepEqual(plan.slots[0].fraction,[.1,.2,.9,.8]);svc.verifyPlan(plan);
 assert.equal(svc.productsForRow([product],product.sku,row).length,1);
-assert.equal(svc.productsForRow([product],product.sku,{color:'亮银/矿石灰/另一色'}).length,0);
+assert.equal(svc.productsForRow([product],product.sku,{color:'亮银/矿石灰/另一色'}).length,1);
 assert.throws(()=>svc.makePlan(row,product,entries.slice(1)),/必须唯一/);
 assert.throws(()=>svc.makePlan(row,product,[...entries,entries[0]]),/必须唯一/);
 assert.throws(()=>svc.makePlan({...row,slots:[{view:'pair',targetBox:[0,0,1000,1000]}]},product,entries),/像素不足/);

@@ -1,6 +1,7 @@
 """Local shoe detection/segmentation. JSON-lines protocol; stdout is protocol only."""
 import json
 import math
+import hashlib
 import sys
 from pathlib import Path
 
@@ -88,14 +89,76 @@ def assign_shoe_groups(accepted, markers):
         raise ValueError('未检测到主推和次推两方鞋位，紫色图暂不生成')
 
 
+def diagnose_result(request):
+    source = Image.open(request['source']).convert('RGB')
+    generated = Image.open(request['generated']).convert('RGB')
+    mask = Image.open(request['mask']).convert('L')
+    stage = request.get('stage', 'local')
+    if stage not in ('local', 'parent'):
+        raise ValueError('未知诊断阶段')
+    if source.size != mask.size or mask.getbbox() is None:
+        raise ValueError('原图和蒙版尺寸不一致或蒙版为空')
+    original_generated_size = list(generated.size)
+    if generated.size != source.size:
+        if stage != 'local' or abs((generated.width/generated.height)/(source.width/source.height)-1) > .01:
+            raise ValueError('生成比例或完整画布尺寸不一致')
+        generated = generated.resize(source.size, Image.Resampling.LANCZOS)
+    m = np.array(mask) > 0
+    delta = np.abs(np.array(source, dtype=np.int16) - np.array(generated, dtype=np.int16)).mean(axis=2)
+    outside = ~m
+    exact_changed = int(np.count_nonzero(outside & np.any(np.array(source) != np.array(generated), axis=2)))
+    outside_changed = int(np.count_nonzero(outside & (delta > 24)))
+    outside_total = int(np.count_nonzero(outside))
+    boundary = np.zeros_like(m)
+    boundary[1:] |= m[1:] != m[:-1]
+    boundary[:,1:] |= m[:,1:] != m[:,:-1]
+    boundary_changed = int(np.count_nonzero(boundary & (delta > 40)))
+    return {'stage': stage, 'generatedSize': original_generated_size,
+            'exactOutsideChangedPixels': exact_changed,
+            'semanticChecked': False,
+            'size': list(source.size), 'outsideChangedPixels': outside_changed,
+            'outsidePixels': outside_total,
+            'outsideChangedFraction': outside_changed / max(1, outside_total),
+            'boundaryChangedPixels': boundary_changed,
+            'passed': stage == 'local' or exact_changed == 0}
+
+
+def corrected_mask(source, box, fallback):
+    """Reuse a locally verified correction only for identical source pixels and crop.
+
+    This is not a scene classifier: a changed image or crop retains its own mask.
+    Read on each composition so existing sessions can reuse newly verified masks.
+    """
+    root = Path.home() / 'Pictures' / 'AI-Shoe-Mask-Repairs'
+    if not root.exists():
+        return fallback, None
+    key = hashlib.sha256(source.tobytes()).hexdigest()
+    manifest = root / (key + '.json')
+    if not manifest.exists():
+        return fallback, None
+    record = json.loads(manifest.read_text())
+    if record.get('sourceSize') != list(source.size) or record.get('box') != list(box):
+        return fallback, None
+    if record.get('sourceHash') != key or record.get('status') != 'verified':
+        return fallback, None
+    path = root / record['mask']
+    if path.parent != root or hashlib.sha256(path.read_bytes()).hexdigest() != record['maskHash']:
+        raise ValueError('已验证蒙版文件变化，停止复用纠正')
+    mask = Image.open(path).convert('L')
+    if mask.size != fallback.size or not mask.getbbox():
+        raise ValueError('已验证蒙版尺寸异常')
+    return mask, str(manifest)
+
+
 def composite(request):
     source = Image.open(request['source']).convert('RGB')
     region = request['region']
     mask = Image.open(region['mask']).convert('L')
     if mask.getbbox() is None:
         raise ValueError('空蒙版，禁止回写')
-    generated = Image.open(request['generated']).convert('RGB')
     box = region['box']
+    mask, correction = corrected_mask(source, box, mask)
+    generated = Image.open(request['generated']).convert('RGB')
     size = (box[2]-box[0], box[3]-box[1])
     if mask.size != size:
         raise ValueError('蒙版尺寸与区域不一致，禁止回写')
@@ -130,7 +193,7 @@ def composite(request):
     outside = int(np.count_nonzero(np.any(before != after, axis=2) & (alpha == 0)))
     if outside:
         raise ValueError('区域外像素校验失败')
-    return {'output': request['output'], 'box': box, 'outsideChangedPixels': outside,
+    return {'output': request['output'], 'box': box, 'maskCorrection':correction, 'outsideChangedPixels': outside,
             'editablePixels': int(np.count_nonzero(alpha)), 'size': list(size),
             'modelOutsideChangedFraction': changed_fraction}
 
@@ -205,6 +268,14 @@ def compose_parent(request):
     changed = np.any(np.array(canvas) != np.array(original), axis=2)
     if np.any(changed & outside):
         raise ValueError('完整画布蒙版外像素改变，禁止回写')
+    # Full-resolution opaque review crops come from the final canvas after all
+    # patches, not the raw generator result or an isolated transparent patch.
+    for check in checks:
+        base = str(Path(check['output']).with_suffix(''))
+        check['reviewInput'] = base + '-review-input.png'
+        check['reviewOutput'] = base + '-review-final.png'
+        original.crop(tuple(check['box'])).save(check['reviewInput'])
+        canvas.crop(tuple(check['box'])).save(check['reviewOutput'])
     if request.get('transparent'):
         # canvas is already alpha-composited; use binary support to avoid applying
         # a soft alpha twice when Photoshop overlays this on the same source.
@@ -310,6 +381,30 @@ class Vision:
         mask=Image.open(request['mask']).convert('L')
         if mask.size != image.size:
             raise ValueError('细节补检输入与蒙版尺寸不一致')
+        if request.get('repairMode') == 'still_life':
+            boxes = request.get('shoeBoxes')
+            if not boxes or len(boxes) > 8:
+                raise ValueError('摆拍修复缺少可靠鞋框，请重新检测')
+            rebuilt = np.zeros((image.height, image.width), dtype=bool)
+            diagnostics = []
+            for b in boxes:
+                context = safe_box(b, image.size, xpad=.20, ypad=.30)
+                if context[2] <= context[0] or context[3] <= context[1]:
+                    raise ValueError('摆拍鞋框超出当前区域')
+                local_box = [b[0]-context[0], b[1]-context[1], b[2]-context[0], b[3]-context[1]]
+                part, confidence = self.segment(image.crop(context), [local_box])[0]
+                allowed = np.zeros_like(part)
+                bounded = safe_box(local_box, (part.shape[1], part.shape[0]), xpad=.14, ypad=.18)
+                allowed[bounded[1]:bounded[3], bounded[0]:bounded[2]] = True
+                part &= allowed
+                area = max(1, (b[2]-b[0])*(b[3]-b[1]))
+                if confidence < .95 or part.sum() < area*.20:
+                    raise ValueError('摆拍鞋主体分割不可靠，保留当前版本')
+                rebuilt[context[1]:context[3], context[0]:context[2]] |= part
+                diagnostics.append({'box':b, 'samScore':confidence, 'maskArea':int(part.sum())})
+            Image.fromarray(rebuilt.astype('uint8')*255).save(request['output'])
+            return {'mask':request['output'], 'repairMode':'still_life', 'shoes':diagnostics,
+                    'restoredPixels':int(np.count_nonzero(rebuilt & (np.array(mask)==0)))}
         diagnostics=[]
         for b in request.get('shoeBoxes', [list(mask.getbbox() or (0,0,*image.size))]):
             context=safe_box(b,image.size,xpad=.20,ypad=.30)
@@ -500,9 +595,10 @@ class Vision:
                 detail_diagnostics.extend(details)
             input_path = folder/('shoe-group-%d.png'%group_index)
             mask_path = folder/('mask-group-%d.png'%group_index)
+            mask_image, correction = corrected_mask(original, box, mask_image)
             crop.save(input_path); mask_image.save(mask_path)
             report['regions'].append({'index':group_index,'role':group[0].get('role'),'box':box,
-                                      'pullTabRecovery':detail_diagnostics,
+                                      'maskCorrection':correction, 'pullTabRecovery':detail_diagnostics,
                                       'dinoBoxes':[detections[item['index']].get('dino_box') for item in group],
                                       'safeBoxes':[detections[item['index']].get('safe_box') for item in group],
                                       'input':str(input_path),
@@ -543,8 +639,13 @@ def serve():
     for line in source:
         try:
             request = json.loads(line)
-            if request['action'] == 'compose_parent':
+            if request['action'] in ('prepare_detail', 'compose_detail'):
+                from detail_patch import run as detail_patch
+                result = detail_patch(request)
+            elif request['action'] == 'compose_parent':
                 result = compose_parent(request)
+            elif request['action'] == 'diagnose_result':
+                result = diagnose_result(request)
             elif request['action'] == 'composite':
                 result = composite(request)
             else:

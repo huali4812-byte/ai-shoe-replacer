@@ -83,7 +83,7 @@ var AI_Shoe_CEP = (function () {
             if(displayCandidate)role='产品展示';
             if(!role)reason='无可用红绿紫标记';
             else if(b[2]<=b[0]||b[3]<=b[1])reason='空区域';
-            else report.tasks.push({documentId:d.id,layerId:l.id,name:name,role:role,bounds:b,slots:role==='双鞋'?2:1,taskType:displayCandidate?'product_display':'shoe',displayEvidence:productDisplay?'named':'bottom_pending_structure'});
+          else report.tasks.push({documentId:d.id,layerId:l.id,name:name,role:role,bounds:b,slots:role==='双鞋'?null:1,taskType:displayCandidate?'product_display':'shoe',displayEvidence:productDisplay?'named':'bottom_pending_structure',multiStyle:true});
           }
         }
         var kindName = l.typename === 'LayerSet' ? 'GROUP' : l.kind === LayerKind.SMARTOBJECT ? 'SMARTOBJECT' : (l.kind === LayerKind.NORMAL ? 'NORMAL' : String(l.kind));
@@ -203,7 +203,7 @@ var AI_Shoe_CEP = (function () {
         var f=new File(a.diagnostic);f.encoding='UTF8';f.open('w');f.write(json(diag));f.close();
         var markers=[];
         function collectMarkers(ls){for(var mi=0;mi<ls.length;mi++){var ml=ls[mi];if(!ml.visible)continue;if(ml.typename==='LayerSet'){collectMarkers(ml.layers);continue;}if(ml.kind===LayerKind.TEXT){var text=String(ml.textItem.contents).replace(/\s/g,'');if(/^(主推|次推)(色)?$/.test(text))markers.push({id:ml.id,role:text.indexOf('主推')===0?'主推':'次推',bounds:bounds(ml)});}}}
-        if(a.dualRole){collectMarkers(d.layers);var main=false,secondary=false;for(var mi=0;mi<markers.length;mi++){main=main||markers[mi].role==='主推';secondary=secondary||markers[mi].role==='次推';}if(!main||!secondary)throw Error('紫色图内部需有独立的主推、次推文字图层；不支持已合并到照片中的提示字');t.roleMarkers=markers;}
+        if(a.dualRole){collectMarkers(d.layers);var main=false,secondary=false;for(var mi=0;mi<markers.length;mi++){main=main||markers[mi].role==='主推';secondary=secondary||markers[mi].role==='次推';}if(!markers.length||(!main&&!secondary))throw Error('紫色多款图内部需有可识别的款式文字图层');t.roleMarkers=markers;t.styleCount=markers.length;}
         // Structural callouts must be present in the immediate containing group.
         // A section name alone also matches people photographs in this template.
         var outer=find(parent.layers,t.layerId),contextText='';
@@ -260,9 +260,20 @@ var AI_Shoe_CEP = (function () {
       var title=find(parent.layers,row.colorLayerId),group=find(parent.layers,row.id);
       if(!title||!group||title.parent.id!==group.id||title.kind!==LayerKind.TEXT)throw Error('颜色标题图层已变化');
       if(String(title.textItem.contents)!==row.color&&String(title.textItem.contents)!==a.color)throw Error('标题已被手动修改，请重新核对');
-      var history=parent.activeHistoryState;
-      try{title.textItem.contents=a.color;row.color=a.color;return {color:a.color,layerId:title.id};}
+      var history=parent.activeHistoryState,dialogs=app.displayDialogs;
+      try{
+        app.displayDialogs=DialogModes.NO;
+        try{title.textItem.contents=a.color;}
+        catch(fontError){
+          // Photoshop can throw a modal missing-font dialog while assigning
+          // text. Fall back to a known installed font and retry silently.
+          title.textItem.font='ArialMT';
+          title.textItem.contents=a.color;
+        }
+        row.color=a.color;return {color:a.color,layerId:title.id,fontFallback:'ArialMT'};
+      }
       catch(e){parent.activeHistoryState=history;throw e;}
+      finally{app.displayDialogs=dialogs;}
     },
     prepareProductDisplayAI:function(a){
       var parent=documentFor(a.documentId,true),slot=find(parent.layers,a.slotId);
@@ -354,6 +365,8 @@ var AI_Shoe_CEP = (function () {
           layer.translate(UnitValue((box[0]+box[2])/2-b[0]-(frac[0]+frac[2])/2*(b[2]-b[0]),'px'),UnitValue((box[1]+box[3])/2-b[1]-(frac[1]+frac[3])/2*(b[3]-b[1]),'px'));
           if(frame)frame.visible=false;
         }
+        if(!a.plan.product||!a.plan.product.color)throw Error('目标颜色标题缺失');
+        title.textItem.contents=a.plan.product.color;
         if(t.displayScope==='row'){row.error='本行已回写，禁止重复执行';return {rowId:row.id,layerId:row.id,slots:3,scope:'existing_smart_object_contents'};}
         actions.saveCopy({documentId:t.doc.id,output:a.contentFile});
         app.activeDocument=parent;var original=find(parent.layers,t.layerId),target=t.parentTargetId?find(parent.layers,t.parentTargetId):null;

@@ -2,7 +2,14 @@
 const fs=require('fs'),path=require('path'),flow=require('./workflow.cjs');
 const VIEWS={'1':'pair','2':'back','3':'sole'};
 function colorKey(s){return String(s||'').normalize('NFKC').replace(/\s/g,'').replace(/[／/、|｜_]/g,'-').toLowerCase();}
-function productsForRow(products,sku,row){return products.filter(p=>p.sku.trim()===sku&&colorKey(p.color)===colorKey(row.color));}
+// Display titles are editorial labels and are not the Eagle color key. Return
+// exact matches when available, otherwise expose all same-SKU products so the
+// user can select the product whose color exists in the asset library.
+function productsForRow(products,sku,row){
+  const same=products.filter(p=>p.sku.trim()===sku);
+  const exact=same.filter(p=>colorKey(p.color)===colorKey(row&&row.color));
+  return exact.length?exact:same;
+}
 async function loadMaterials(root,sku){
   if(!fs.existsSync(root))throw Error('Eagle 素材库不可访问');
   const variants=flow.skuVariants(sku),items=new Map();

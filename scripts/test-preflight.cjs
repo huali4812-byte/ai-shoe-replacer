@@ -1,0 +1,3 @@
+const assert=require('assert'),fs=require('fs'),os=require('os'),path=require('path'),{main}=require('./preflight-single.cjs');
+const d=fs.mkdtempSync(path.join(os.tmpdir(),'preflight-'));
+try{const f=path.join(d,'report.json');const input=path.join(d,'i.png'),mask=path.join(d,'m.png');fs.writeFileSync(input,'x');fs.writeFileSync(mask,'x');fs.writeFileSync(f,JSON.stringify({regions:[{id:'r',input,visionMask:mask,protection:{sourceFile:path.join(d,'missing')}}]}));const r=main(f);assert(!r.ready);assert.equal(r.rows[0].missing.length,1);console.log('PASS single preflight reports missing source without calling API');}finally{fs.rmSync(d,{recursive:true,force:true});}
