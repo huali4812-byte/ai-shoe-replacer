@@ -206,7 +206,23 @@ def composite(request):
     if mask.getbbox() is None:
         raise ValueError('空蒙版，禁止回写')
     box = region['box']
-    mask, correction = corrected_mask(source, box, mask)
+    
+    # Check for inverted mask (background writable instead of foreground)
+    from mask_polarity import propose
+    repaired, polarity = propose(source, mask, box)
+    correction = None
+    if polarity['status'] == 'candidate':
+        correction = {'method': 'white_background_inversion', 'evidence': polarity}
+        mask = repaired
+    elif polarity['status'] not in ('unchanged', 'not_applicable'):
+        correction = {'method': 'polarity_check_inconclusive', 'evidence': polarity}
+    
+    mask, legacy_correction = corrected_mask(source, box, mask)
+    if legacy_correction and not correction:
+        correction = legacy_correction
+    elif legacy_correction and correction:
+        correction = {'primary': correction, 'secondary': legacy_correction}
+    
     generated = Image.open(request['generated']).convert('RGB')
     size = (box[2]-box[0], box[3]-box[1])
     if mask.size != size:

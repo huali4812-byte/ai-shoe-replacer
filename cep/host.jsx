@@ -124,7 +124,13 @@ var AI_Shoe_CEP = (function () {
       copy = d.duplicate('AI-Shoe-temp', true);
       rgb(copy);
       copy.crop([UnitValue(box[0],'px'),UnitValue(box[1],'px'),UnitValue(box[2],'px'),UnitValue(box[3],'px')]);
-      copy.flatten();
+      // Preserve transparency for normal exports. Flattening here turns an
+      // isolated smart-object shoe into a white background and can invert the
+      // later shoe mask semantics. Channel exports still use a white mask over
+      // a black canvas below.
+      if (!channelName) {
+        try { copy.trim(TrimType.TRANSPARENT, true, true, true, true); } catch(ignoreTrim) {}
+      }
       if (channelName) {
         copy.selection.deselect(); var black = new SolidColor(); black.rgb.hexValue = '000000'; copy.selection.selectAll(); copy.selection.fill(black); copy.selection.deselect();
         copy.selection.load(copy.channels.getByName(channelName)); var white = new SolidColor(); white.rgb.hexValue = 'FFFFFF'; copy.selection.fill(white); copy.selection.deselect();
