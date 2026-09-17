@@ -60,7 +60,16 @@ def boxes_near(a, b):
 def group_nearby_regions(regions):
     groups = []
     for region in regions:
-        touching = [g for g in groups if any(region.get('role') == old.get('role') and boxes_near(region['cropBox'], old['cropBox']) for old in g)]
+        # Support both 'cropBox' (from early detection) and 'box' (from final regions)
+        box = region.get('cropBox') or region.get('box')
+        if not box:
+            groups.append([region])
+            continue
+        touching = [g for g in groups if any(
+            region.get('role') == old.get('role') and
+            boxes_near(box, old.get('cropBox') or old.get('box'))
+            for old in g if (old.get('cropBox') or old.get('box'))
+        )]
         if not touching:
             groups.append([region])
             continue
@@ -81,8 +90,45 @@ def generation_groups(regions, structure=False):
     return group_nearby_regions(regions) if structure else [[r] for r in regions]
 
 
+def merge_overlapping_regions(source, regions, folder):
+    """Keep every detected shoe as an independent generation unit.
+
+    Crop overlap is harmless. If only the optional 4px edit margins collide,
+    disable expansion for both shoes. Real semantic-mask overlap is ambiguous:
+    reject it instead of silently combining two or more shoes into one request.
+    """
+    if len(regions) < 2:
+        return regions
+    size = source.size
+    semantic, expanded = [], []
+    for region in regions:
+        box = region['box']
+        mask = Image.open(region['mask']).convert('L')
+        if mask.size != (box[2]-box[0], box[3]-box[1]) or not mask.getbbox():
+            raise ValueError('单鞋蒙版为空或尺寸不一致')
+        raw = Image.new('L', size, 0)
+        raw.paste(mask, tuple(box[:2]))
+        grown = Image.new('L', size, 0)
+        grown.paste(mask.filter(ImageFilter.MaxFilter(9)), tuple(box[:2]))
+        semantic.append(np.asarray(raw) > 0)
+        expanded.append(np.asarray(grown) > 0)
+    for i in range(len(regions)):
+        for j in range(i):
+            if np.any(semantic[i] & semantic[j]):
+                raise ValueError('单鞋主体蒙版重叠，无法安全逐鞋生成；请重新检测')
+            if np.any(expanded[i] & expanded[j]):
+                regions[i]['noMaskExpansion'] = True
+                regions[j]['noMaskExpansion'] = True
+    return regions
+
+
 def validate_shoe_supports(size, regions):
-    """Reject ambiguous expanded write ownership rather than overwrite a shoe."""
+    """Final validation that regions are safe to write independently.
+
+    This should never fail if generation_groups() works correctly.
+    """
+    if not regions:
+        return
     occupied = np.zeros((size[1], size[0]), dtype=bool)
     for region in regions:
         box = region['box']
@@ -90,10 +136,10 @@ def validate_shoe_supports(size, regions):
         if mask.size != (box[2]-box[0], box[3]-box[1]) or not mask.getbbox():
             raise ValueError('单鞋蒙版为空或尺寸不一致')
         full = Image.new('L', size, 0)
-        full.paste(mask.filter(ImageFilter.MaxFilter(9)), tuple(box[:2]))
+        editable = mask if region.get('noMaskExpansion') else mask.filter(ImageFilter.MaxFilter(9))
+        full.paste(editable, tuple(box[:2]))
         support = np.array(full) > 0
-        if np.any(support & occupied):
-            raise ValueError('单鞋扩展蒙版重叠，无法安全独立生成；请重新检测鞋位')
+        # Expanded edit margins are not ownership and may legitimately touch.
         occupied |= support
 
 
@@ -206,7 +252,7 @@ def composite(request):
     if mask.getbbox() is None:
         raise ValueError('空蒙版，禁止回写')
     box = region['box']
-    
+
     # Check for inverted mask (background writable instead of foreground)
     from mask_polarity import propose
     repaired, polarity = propose(source, mask, box)
@@ -216,13 +262,13 @@ def composite(request):
         mask = repaired
     elif polarity['status'] not in ('unchanged', 'not_applicable'):
         correction = {'method': 'polarity_check_inconclusive', 'evidence': polarity}
-    
+
     mask, legacy_correction = corrected_mask(source, box, mask)
     if legacy_correction and not correction:
         correction = legacy_correction
     elif legacy_correction and correction:
         correction = {'primary': correction, 'secondary': legacy_correction}
-    
+
     generated = Image.open(request['generated']).convert('RGB')
     size = (box[2]-box[0], box[3]-box[1])
     if mask.size != size:
@@ -240,7 +286,7 @@ def composite(request):
     # Expand the editable boundary slightly so the replacement shoe is not
     # clipped by the old shoe silhouette (the source shoe mask is only a
     # protection guide, not the new shoe's final outline).
-    expanded_mask = mask if region.get('sceneType') == 'shoe_structure' else mask.filter(ImageFilter.MaxFilter(9))
+    expanded_mask = mask if (region.get('sceneType') == 'shoe_structure' or region.get('noMaskExpansion')) else mask.filter(ImageFilter.MaxFilter(9))
     alpha = np.array(expanded_mask)
     outside_mask = alpha == 0
     delta = np.abs(np.array(original, dtype=np.float32)-np.array(generated, dtype=np.float32)).mean(axis=2)
@@ -264,8 +310,9 @@ def composite(request):
 
 
 def role_ownership(size, regions):
-    """Reject contested expanded pixels, including regions without a preview."""
+    """Validate original semantic ownership and mark unsafe edit dilation."""
     owners = {}
+    expanded_by_role = {}
     for region in regions:
         role = region.get('role')
         if role not in ('主推', '次推'):
@@ -274,15 +321,28 @@ def role_ownership(size, regions):
         mask = Image.open(region['mask']).convert('L')
         if mask.size != (box[2]-box[0], box[3]-box[1]) or mask.getbbox() is None:
             raise ValueError('角色保护蒙版为空或尺寸不一致')
-        expanded = mask.filter(ImageFilter.MaxFilter(9))
+        # Ownership comes from the original semantic mask only. Dilation is
+        # merely an editable boundary and falsely rejects close double shoes.
         full = Image.new('L', size, 0)
-        full.paste(expanded, tuple(box[:2]))
+        full.paste(mask, tuple(box[:2]))
         occupied = np.array(full) > 0
         for other, previous in owners.items():
             if other != role and np.any(occupied & previous):
                 count = int(np.count_nonzero(occupied & previous))
-                raise ValueError(f'跨角色扩展蒙版冲突：{count} 像素归属不明确，禁止整图回写')
+                raise ValueError(f'跨角色原始蒙版冲突：{count} 像素归属不明确，禁止整图回写')
+        expanded_full = Image.new('L', size, 0)
+        expanded_full.paste(mask.filter(ImageFilter.MaxFilter(9)), tuple(box[:2]))
+        expanded = np.array(expanded_full) > 0
+        if any(other != role and np.any(expanded & previous)
+               for other, previous in expanded_by_role.items()):
+            region['noMaskExpansion'] = True
+        for other, previous in expanded_by_role.items():
+            if other != role and np.any(expanded & previous):
+                for earlier in regions:
+                    if earlier.get('role') == other:
+                        earlier['noMaskExpansion'] = True
         owners[role] = occupied | owners.get(role, np.zeros_like(occupied))
+        expanded_by_role[role] = expanded | expanded_by_role.get(role, np.zeros_like(expanded))
 
 
 def compose_parent(request):
@@ -298,6 +358,11 @@ def compose_parent(request):
         if any((tuple(r['box']), r['mask'], r.get('role')) not in keys for r in request['regions']):
             raise ValueError('合成区域与角色保护清单不一致')
         role_ownership(original.size, protections)
+        no_expansion = {(tuple(r['box']), r['mask'], r.get('role'))
+                        for r in protections if r.get('noMaskExpansion')}
+        for region in request['regions']:
+            if (tuple(region['box']), region['mask'], region.get('role')) in no_expansion:
+                region['noMaskExpansion'] = True
     for region in request['regions']:
         try:
             patch_path = region['output']
@@ -679,6 +744,9 @@ class Vision:
                                       'segmentationScore':min(item['segmentationScore'] for item in group)})
             overlay.paste(Image.new('RGB',original.size,(255,0,80)),(0,0),Image.fromarray((full*100).astype('uint8')))
         if not structure:
+            # Reconcile conflicts using the actual recovered/corrected masks.
+            # The pre-generation detection items do not have final mask paths.
+            report['regions'] = merge_overlapping_regions(original, report['regions'], folder)
             validate_shoe_supports(original.size, report['regions'])
             report['generationMode'] = 'individual_shoes'
         draw = ImageDraw.Draw(overlay)
