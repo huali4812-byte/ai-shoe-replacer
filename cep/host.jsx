@@ -226,7 +226,7 @@ var AI_Shoe_CEP = (function () {
         var f=new File(a.diagnostic);f.encoding='UTF8';f.open('w');f.write(json(diag));f.close();
         var markers=[];
         function collectMarkers(ls){for(var mi=0;mi<ls.length;mi++){var ml=ls[mi];if(!ml.visible)continue;if(ml.typename==='LayerSet'){collectMarkers(ml.layers);continue;}if(ml.kind===LayerKind.TEXT){var text=String(ml.textItem.contents).replace(/\s/g,'');if(/^(主推|次推)(色)?$/.test(text))markers.push({id:ml.id,role:text.indexOf('主推')===0?'主推':'次推',bounds:bounds(ml)});}}}
-        if(a.dualRole){collectMarkers(d.layers);var main=false,secondary=false;for(var mi=0;mi<markers.length;mi++){main=main||markers[mi].role==='主推';secondary=secondary||markers[mi].role==='次推';}if(!markers.length||(!main&&!secondary))throw Error('紫色多款图内部需有可识别的款式文字图层');t.roleMarkers=markers;t.styleCount=markers.length;}
+        if(a.dualRole){collectMarkers(d.layers);var main=false,secondary=false;for(var mi=0;mi<markers.length;mi++){main=main||markers[mi].role==='主推';secondary=secondary||markers[mi].role==='次推';}if(markers.length&&(!main||!secondary))throw Error('紫色图只有一种角色文字，请补齐主推和次推，或移除全部角色文字使用随机配对');t.roleMarkers=markers;t.styleCount=markers.length;if(!markers.length&&typeof t.randomMainPair!=='number')t.randomMainPair=Math.random()<0.5?0:1;}
         // Structural callouts must be present in the immediate containing group.
         // A section name alone also matches people photographs in this template.
         var outer=find(parent.layers,t.layerId),contextText='';
@@ -242,7 +242,7 @@ var AI_Shoe_CEP = (function () {
           d.selection.load(channels[0]);var region=actions.captureSmartProtection({id:a.id,layerId:t.layerId});
           return {box:region.box,smartLayerId:t.layerId,source:'namedChannel',sourceFile:sourceFile,regions:[{box:region.box,mask:null}]};
         }
-        return {source:'needsVision',sourceFile:sourceFile,smartLayerId:t.layerId,documentId:d.id,roleMarkers:markers,sceneType:sceneType};
+        return {source:'needsVision',sourceFile:sourceFile,smartLayerId:t.layerId,documentId:d.id,roleMarkers:markers,randomPairRoles:!!a.dualRole&&!markers.length,randomMainPair:t.randomMainPair,sceneType:sceneType};
       }finally{app.activeDocument=parent;}
     },
     inspectProductDisplay:function(a){
@@ -507,14 +507,28 @@ var AI_Shoe_CEP = (function () {
         // Restore it even for a cached target from a previous write.
         if(!originalTarget||target.id===originalTarget.id)throw Error('回写目标与原层身份异常');
         target.move(originalTarget,ElementPlacement.PLACEBEFORE);
-        // Moving a layer can release its clipping mask. Restore clipping last.
-        target.grouped=expectedGrouped;
-        originalTarget.visible=false;
-        if(target.grouped!==expectedGrouped||originalTarget.visible)throw Error('回写剪贴关系或原层可见性校验失败：目标层='+target.id+'，原层='+originalTarget.id+'，期望剪贴='+expectedGrouped+'，目标剪贴='+target.grouped+'，原层当前剪贴='+originalTarget.grouped+'，原层可见='+originalTarget.visible);
-        target.visible=true; t.parent.activeLayer=target;
+        // Photoshop may settle clipping after a move/visibility change. Reacquire
+        // by ID and repair final state, not a stale DOM handle. Never accept a
+        // persistent mismatch, and never toggle a whole clipping group.
+        var settleTargetId=target.id,settleOriginalId=originalTarget.id,settled=false,settleErrors=[],settleAttempt;
+        for(settleAttempt=0;settleAttempt<3;settleAttempt++){
+          app.activeDocument=t.parent;
+          target=find(t.parent.layers,settleTargetId);originalTarget=find(t.parent.layers,settleOriginalId);
+          if(!target||!originalTarget||target.id===originalTarget.id)throw Error('回写收尾图层身份已变化');
+          try{
+            t.parent.activeLayer=target;
+            originalTarget.visible=false;target.visible=true;
+            target.grouped=expectedGrouped;
+          }catch(settleError){settleErrors.push(settleError.message);}
+          try{app.refresh();}catch(ignoreSettleRefresh){}
+          target=find(t.parent.layers,settleTargetId);originalTarget=find(t.parent.layers,settleOriginalId);
+          if(target&&originalTarget&&target.grouped===expectedGrouped&&!originalTarget.visible&&target.visible){settled=true;break;}
+        }
+        if(!settled)throw Error('回写剪贴关系或原层可见性校验失败（已恢复3次）：目标层='+settleTargetId+'，原层='+settleOriginalId+'，期望剪贴='+expectedGrouped+'，目标剪贴='+(target?target.grouped:'missing')+'，原层可见='+(originalTarget?originalTarget.visible:'missing')+'；'+settleErrors.join('；'));
+        t.parent.activeLayer=target;
         try { app.refresh(); } catch(ignoreRefresh) {}
         t.patchGroupIds=newPatchGroups;
-        return {layerId:target.id,originalLayerId:t.layerId,visible:target.visible,documentId:t.parent.id,contentFile:a.contentFile};
+        return {layerId:target.id,originalLayerId:t.layerId,visible:target.visible,documentId:t.parent.id,contentFile:a.contentFile,clippingRestoreAttempts:settleAttempt+1,expectedGrouped:expectedGrouped};
       }catch(e){
         var rollbackErrors=[];
         // Always attempt both documents; one failed history restore must not skip the other.

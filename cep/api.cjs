@@ -88,14 +88,18 @@ async function test() {
 async function generate(original, references, prompt, options = {}) {
   const logDir=path.join(os.homedir(),"Pictures","AI-Shoe-Results","diagnostics");fs.mkdirSync(logDir,{recursive:true});
   const logFile=path.join(logDir,Date.now()+"-"+crypto.randomBytes(4).toString("hex")+".jsonl"),epoch=Date.now();
-  const log=(event,details={})=>fs.appendFileSync(logFile,JSON.stringify({time:new Date().toISOString(),elapsedMs:Date.now()-epoch,taskId:options.taskId||null,event,...details})+"\n");
+  const log=(event,details={})=>{const record={elapsedMs:Date.now()-epoch,taskId:options.taskId||null,operationId:path.basename(logFile),event,...details};require('./failure-log.cjs').event(event,record);try{fs.appendFileSync(logFile,require('./failure-log.cjs').redact(JSON.stringify({time:new Date().toISOString(),...record}))+"\n");}catch(e){console.error('API诊断写入失败：'+e.message);}};
   log("prepare_start");
   try {
   const c=config(); if(!references.length) throw Error('请选择目标鞋参考图');
   const started=Date.now();
   const content=[{type:'text',text:prompt}];
   for(const [imageIndex,file] of [original].concat(references).entries()){const ext=path.extname(file).toLowerCase(),mime={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg'}[ext];if(!mime)throw Error('原图和参考图仅支持 PNG/JPEG');let raw;
-    if(imageIndex>0&&(options.logoReferenceIndices||[]).includes(imageIndex-1)){
+    if(imageIndex>0&&(options.soleReferenceIndices||[]).includes(imageIndex-1)){
+      try{const prepared=require('./sole-reference.cjs').prepare(file);raw=prepared.bytes;log('sole_reference_prepared',{referenceIndex:imageIndex-1,...prepared.info});}
+      catch(e){log('sole_reference_fallback',{referenceIndex:imageIndex-1,reason:e.message});}
+    }
+    if(!raw&&imageIndex>0&&(options.logoReferenceIndices||[]).includes(imageIndex-1)){
       try{const prepared=require('./logo-reference.cjs').prepare(file);raw=prepared.bytes;log('logo_reference_prepared',{referenceIndex:imageIndex-1,...prepared.info});}
       catch(e){log('logo_reference_fallback',{referenceIndex:imageIndex-1,reason:e.message});}
     }
@@ -113,7 +117,7 @@ async function generate(original, references, prompt, options = {}) {
   const recoveryFile=path.join(recoveryDir,crypto.createHash('sha256').update(c.base+'\n'+payload).digest('hex')+'.json');
   let response;
   if(fs.existsSync(recoveryFile)){response=fs.readFileSync(recoveryFile);log('download_response_reused');}
-  const maxAttempts=Number.isInteger(options.maxAttempts)?Math.max(1,Math.min(3,options.maxAttempts)):3;
+  const maxAttempts=1; // No automatic repeat of a potentially billable POST.
   for(let attempt=1;!response&&attempt<=maxAttempts;attempt++){
     try { log('attempt_start',{attempt}); response=await request(c.base+'chat/completions',payload,headers,API_TIMEOUT_MS,log); break; }
     catch(e){
@@ -136,11 +140,11 @@ async function generate(original, references, prompt, options = {}) {
   }
   console.log('[AI] response after '+(Date.now()-started)+' ms');
   const msg=data.choices&&data.choices[0]&&data.choices[0].message, parts=msg&&msg.content; let bytes=null;
-  const arr=Array.isArray(parts)?parts:[{text:parts||''}]; for(const part of arr){const u=part.image_url&& (part.image_url.url||part.image_url);if(typeof u==='string'&&u.startsWith('data:')){bytes=Buffer.from(u.split(',')[1],'base64');break;}if(typeof part.text==='string'){const m=part.text.match(/data:image\/[^;]+;base64,([A-Za-z0-9+/=]+)/);if(m){bytes=Buffer.from(m[1],'base64');break;}const link=part.text.match(/!\[[^\]]*\]\((https?:\/\/[^)]+)\)/)||part.text.match(/https?:\/\/[^\s]+\.(?:png|jpg|jpeg)(?:\?[^\s]*)?/i);if(link){fs.writeFileSync(recoveryFile,response,{mode:0o600});log('download_response_saved');const imageUrl=link[1]||link[0];let last;const maxDownloadAttempts=5;for(let attempt=1;attempt<=maxDownloadAttempts;attempt++){try{log("download_start",{attempt,maxAttempts:maxDownloadAttempts,timeoutMs:180000,queueConcurrency:DOWNLOAD_CONCURRENCY});bytes=await queuedDownload(imageUrl,180000,log);break;}catch(e){last=e;const transient=/HTTP 408|HTTP 429|HTTP 500|HTTP 502|HTTP 503|HTTP 504|HTTP 525|ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|socket hang up|network socket disconnected/i.test(e.message||'');log('download_attempt_failed',{attempt,maxAttempts:maxDownloadAttempts,transient,error:e.message});if(!transient||attempt===maxDownloadAttempts)throw e;await new Promise(resolve=>setTimeout(resolve,Math.min(30000,2000*Math.pow(2,attempt-1))));}}if(!bytes&&last)throw last;break;}}}
+  const arr=Array.isArray(parts)?parts:[{text:parts||''}]; for(const part of arr){const u=part.image_url&& (part.image_url.url||part.image_url);if(typeof u==='string'&&u.startsWith('data:')){bytes=Buffer.from(u.split(',')[1],'base64');break;}if(typeof part.text==='string'){const m=part.text.match(/data:image\/[^;]+;base64,([A-Za-z0-9+/=]+)/);if(m){bytes=Buffer.from(m[1],'base64');break;}const link=part.text.match(/!\[[^\]]*\]\((https?:\/\/[^)]+)\)/)||part.text.match(/https?:\/\/[^\s]+\.(?:png|jpg|jpeg)(?:\?[^\s]*)?/i);if(link){fs.writeFileSync(recoveryFile,response,{mode:0o600});log('download_response_saved');const imageUrl=link[1]||link[0];let last;const maxDownloadAttempts=3;for(let attempt=1;attempt<=maxDownloadAttempts;attempt++){try{log("download_start",{attempt,maxAttempts:maxDownloadAttempts,timeoutMs:180000,queueConcurrency:DOWNLOAD_CONCURRENCY});bytes=await queuedDownload(imageUrl,180000,log);break;}catch(e){last=e;const transient=/图片下载超时|HTTP 408|HTTP 429|HTTP 500|HTTP 502|HTTP 503|HTTP 504|HTTP 525|ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|socket hang up|network socket disconnected/i.test(e.message||'');log('download_attempt_failed',{attempt,maxAttempts:maxDownloadAttempts,transient,error:e.message});if(!transient||attempt===maxDownloadAttempts)throw e;log('retry_scheduled',{stage:'download',attempt,nextAttempt:attempt+1,maxAttempts:maxDownloadAttempts});await new Promise(resolve=>setTimeout(resolve,Math.min(30000,2000*Math.pow(2,attempt-1))));}}if(!bytes&&last)throw last;break;}}}
   if(!bytes)throw Error('接口未返回图片内容'); const png=bytes.slice(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])); if(!png&&!(bytes[0]===255&&bytes[1]===216&&bytes[2]===255))throw Error('接口返回内容不是 PNG/JPEG');
   try { const im=png?PNG.sync.read(bytes):jpeg.decode(bytes); log('image_dimensions',{width:im.width,height:im.height,requestedAspect}); if(options.validateAspect){const actual=im.width/im.height, want=+requestedAspect.split(':')[0]/+requestedAspect.split(':')[1]; if(Math.abs(actual/want-1)>0.01) throw Error('接口忽略比例，返回 '+im.width+'x'+im.height+'（要求 '+requestedAspect+'）');} } catch (e) { if(options.validateAspect) throw e; }
   const folder=path.join(os.homedir(),'Pictures','AI-Shoe-Results');fs.mkdirSync(folder,{recursive:true});const out=path.join(folder,Date.now()+'-'+crypto.randomBytes(4).toString('hex')+(png?'.png':'.jpg'));fs.writeFileSync(out,bytes,{flag:'wx'});log("success",{output:out});try{fs.unlinkSync(recoveryFile);}catch(_){}return out;
-  } catch(e){log("failed",{errorType:e.name,error:e.message||String(e)});throw Error(e.message+"；诊断："+logFile);}
+  } catch(e){log("failed",{errorType:e.name,error:e.message||String(e)});e.message+="；诊断："+logFile;require('./failure-log.cjs').failure(e,{stage:'generate_or_download',taskId:options.taskId,diagnostic:logFile});throw e;}
 }
 async function analyze(files, prompt) {
   const c=config();

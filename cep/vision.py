@@ -9,6 +9,30 @@ import numpy as np
 from PIL import Image, ImageFilter, ImageDraw
 
 
+def expanded_binary_support(mask, radius):
+    """Exactly MaxFilter(2*radius+1) > 0 for an L mask, without a large kernel.
+
+    Boolean OR is separable. Clipped windows equal PIL edge replication for
+    this predicate; output dimensions and support at image edges are unchanged.
+    """
+    if not isinstance(radius, int) or radius < 0:
+        raise ValueError('Expansion radius must be a nonnegative integer')
+    if mask.mode != 'L':
+        raise ValueError('Expansion requires an L mask')
+    support = np.asarray(mask) > 0
+    for axis in (1, 0):
+        length = support.shape[axis]
+        prefix = np.cumsum(support, axis=axis, dtype=np.int32)
+        pad = [(0, 0), (0, 0)]
+        pad[axis] = (1, 0)
+        prefix = np.pad(prefix, pad, mode='constant')
+        positions = np.arange(length)
+        low = np.maximum(positions-radius, 0)
+        high = np.minimum(positions+radius+1, length)
+        support = np.take(prefix, high, axis=axis) > np.take(prefix, low, axis=axis)
+    return support
+
+
 def square_box(box, size, padding=0.16):
     x0, y0, x1, y1 = box
     side = max(1, math.ceil(max(x1-x0, y1-y0) * (1+padding*2)))
@@ -347,7 +371,7 @@ class Vision:
         if not bounds:
             return shoe_mask, []
         reach = max(8, round(max(bounds[2]-bounds[0], bounds[3]-bounds[1])*.10))
-        connected = np.array(shoe_mask.filter(ImageFilter.MaxFilter(reach*2+1))) > 0
+        connected = expanded_binary_support(shoe_mask, reach)
         inputs = self.detector_processor(images=image, text='shoe pull tab. shoe tongue. heel loop. hand. sock.', return_tensors='pt')
         with self.torch.inference_mode():
             outputs = self.detector(**inputs)
@@ -522,7 +546,7 @@ class Vision:
         def original_box(box):
             return [round(box[0] * sx), round(box[1] * sy),
                     round(box[2] * sx), round(box[3] * sy)]
-        dual = bool(request.get('roleMarkers'))
+        dual = bool(request.get('roleMarkers') or request.get('randomPairRoles'))
         protected_full = np.array(Image.fromarray(protected.astype('uint8')*255).resize(original.size, Image.Resampling.NEAREST)) > 0 if dual else None
         accepted = []
         for i, (d, (mask, confidence)) in enumerate(zip(detections, masks)):
@@ -588,7 +612,13 @@ class Vision:
         role_error = None
         if dual:
             try:
-                assign_shoe_groups(accepted, request['roleMarkers'])
+                if request.get('roleMarkers'):
+                    assign_shoe_groups(accepted, request['roleMarkers'])
+                elif request.get('randomPairRoles'):
+                    from random_pair_roles import assign
+                    report['roleAssignment'] = assign(accepted, request.get('randomMainPair'))
+                else:
+                    raise ValueError('紫色角色分配配置缺失')
                 for item in accepted:
                     d = detections[item['index']]
                     d['role'] = d['assigned_role'] = item['role']

@@ -27,11 +27,10 @@ function once(data){return new Promise((resolve,reject)=>{
 });}
 function request(data){const epoch=generation;const run=async()=>{
  if(epoch!==generation)throw Error('视觉请求已取消');
- try{return await once(data);}catch(e){
-  if(data.action!=='detect'||!e.detectorExited||epoch!==generation)throw e;
-  console.warn('[vision] 检测进程退出，自动重启一次（不调用生图）');
-  try{const result=await once(data);return {...result,detectorRecovery:{attempts:2,previousError:e.message}};}
-  catch(second){throw Error(second.message+'；检测自动恢复一次仍失败；首次：'+e.message);}
+ const logs=require('./failure-log.cjs');const operationId=require('crypto').randomBytes(12).toString('hex');
+ logs.event('attempt_started',{stage:data.action,operationId,source:data.source,attempt:1,maxAttempts:1});
+ try{const result=await once(data);logs.event('attempt_succeeded',{stage:data.action,operationId});return result;}catch(e){
+  logs.failure(e,{stage:data.action,operationId,source:data.source,attempt:1,maxAttempts:1});throw e;
  }
  };const result=queue.then(run);queue=result.catch(()=>{});return result;}
 function close(){generation++;if(child){const proc=child;proc.fail('主动关闭',false);proc.kill();}}

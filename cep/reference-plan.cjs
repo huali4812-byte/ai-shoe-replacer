@@ -3,6 +3,8 @@ const fs=require('fs'),path=require('path'),crypto=require('crypto');
 // Filename evidence is catalog metadata, never an inferred camera pose.
 function classify(file){
  const name=path.basename(file,path.extname(file)).toLowerCase();
+ const catalog=name.match(/_t_(back|side|heel)$/);
+ if(catalog)return {view:{back:'inner',side:'outer',heel:'back'}[catalog[1]],detail:catalog[1]==='heel'?'heel':'overall',evidence:'user_catalog_convention'};
  const tokens=name.split(/[_\s.-]+/);
  const has=(words)=>words.some(w=>tokens.includes(w));
  const text=name.replace(/[\\-_]+/g,' ');
@@ -32,7 +34,7 @@ function classify(file){
 }
 function plan(material,{view='unknown',detail='overall'}={}){
  const files=[...new Set([material.cutout,...(material.references||[])].filter(Boolean))];
- const entries=files.map(file=>({file,...classify(file),sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}));
+ const entries=files.map(sourceFile=>{const file=require('./reference-cache.cjs').snapshot(sourceFile);return {file,sourceFile,...(material.referenceMetadata&&material.referenceMetadata[sourceFile]||classify(sourceFile)),sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')};});
  
  // 如果请求了特定视角或细节，优先匹配
  const matches=entries.filter(e=>(view!=='unknown'&&e.view===view)||(detail!=='overall'&&e.detail===detail));

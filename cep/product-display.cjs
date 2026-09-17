@@ -1,5 +1,6 @@
 // Product display reference matching and isolated AI reference preparation.
 const fs=require('fs'),path=require('path'),flow=require('./workflow.cjs');
+const referenceCache=require('./reference-cache.cjs');
 const VIEWS={'1':'pair','2':'back','3':'sole'};
 function colorKey(s){return String(s||'').normalize('NFKC').replace(/[\s／/、|｜_]+/g,'-').toLowerCase();}
 // Display titles are editorial labels and are not the Eagle color key. Return
@@ -34,7 +35,7 @@ async function resolveSubjectFrames(row,root,loader=loadMaterials){
       const hits=entries.filter(e=>e.kind===kind&&e.view===slot.view&&colorKey(e.color)===colorKey(p.color));
       if(hits.length!==1)throw Error('旧款 '+p.sku+' '+p.color+' '+slot.view+' '+kind+' 素材必须唯一');return hits[0].file;
     };
-    const photo=pick('bd'),transparent=pick('t'),size=flow.imageDimensions(photo),im=flow.decode(transparent);
+    const photo=referenceCache.snapshot(pick('bd')),transparent=referenceCache.snapshot(pick('t')),size=flow.imageDimensions(photo),im=flow.decode(transparent);
     if(size.width!==im.width||size.height!==im.height)throw Error('旧款白底与透明素材尺寸不一致');
     if(Math.abs((b[2]-b[0])/(b[3]-b[1])/(im.width/im.height)-1)>.01)throw Error('原素材非等比例变换，不能恢复主体框');
     let x0=im.width,y0=im.height,x1=0,y1=0,hasTransparency=false;
@@ -52,7 +53,9 @@ function makePlan(row,product,entries){
   for(const slot of row.slots){
     const view=slot.view||VIEWS[slot.name];if(!['pair','back','sole'].includes(view)||seen.has(view))throw Error('视角缺失或重复');seen.add(view);
     const pick=kind=>{const hits=entries.filter(e=>e.view===view&&e.kind===kind&&colorKey(e.color)===colorKey(product.color));if(hits.length!==1)throw Error(product.color+' '+view+' '+kind+' 素材必须唯一，实际 '+hits.length);return hits[0].file;};
-    const file=pick('bd'),alphaFile=pick('t');
+    // Stage selected files even for tasks holding old /Volumes entries in memory.
+    // All downstream reads and Photoshop writes use the verified local snapshot.
+    const file=referenceCache.snapshot(pick('bd')),alphaFile=referenceCache.snapshot(pick('t'));
     const photoDim=flow.imageDimensions(file),alphaDim=flow.imageDimensions(alphaFile);
     if(photoDim.width!==alphaDim.width||photoDim.height!==alphaDim.height)throw Error(view+' 白底图与透明图尺寸不一致');
     const alpha=flow.decode(alphaFile);

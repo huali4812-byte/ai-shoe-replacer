@@ -1,0 +1,25 @@
+'use strict';
+const assert=require('assert');
+const {run}=require('../cep/batch-pipeline.cjs');
+const tick=()=>new Promise(r=>setImmediate(r));
+(async()=>{
+ let releaseFirst,releaseSecond;
+ const first=new Promise(r=>releaseFirst=r),second=new Promise(r=>releaseSecond=r);
+ const events=[];
+ const p=run({parents:[1,2],prepare:async n=>{events.push('prepare'+n);if(n===2)await second;return [{id:String(n)}];},generate:async r=>{events.push('generate'+r.id);if(r.id==='1')await first;events.push('done'+r.id);}});
+ await tick();assert(events.includes('generate1'));assert(events.includes('prepare2'));assert(!events.includes('done1'));
+ releaseSecond();await tick();releaseFirst();assert.equal((await p).length,2);
+ let active=0,peak=0,prepared=0;const gates=[];
+ const capped=run({parents:Array.from({length:10},(_,i)=>i),prepare:async n=>{prepared++;return [{id:String(n)}];},generate:async()=>{active++;peak=Math.max(peak,active);await new Promise(r=>gates.push(r));active--;}});
+ await tick();assert.equal(peak,7);assert.equal(prepared,7);
+ while(gates.length){gates.shift()();await tick();}await capped;assert.equal(peak,7);
+ let release,settled=false;
+ const fatal=run({parents:[1,2],prepare:async n=>{if(n===2)throw Error('prepare failed');return [{id:'a'}];},generate:()=>new Promise(r=>release=r)});
+ const observed=fatal.then(()=>{throw Error('expected rejection');},e=>{assert.equal(e.message,'prepare failed');settled=true;});
+ await tick();assert(!settled);release();await observed;assert(settled);
+ let calls=0;
+ const rows=await run({parents:[1,2,3],prepare:async n=>n===2?[]:[{id:'same'}],generate:async()=>{calls++;}});
+ assert.equal(calls,1);assert.equal(rows.length,1);
+ await assert.rejects(run({parents:[1],prepare:async()=>[{id:'x'}],generate:async()=>{throw Error('worker failed');}}),/worker failed/);
+ console.log('PASS pipeline: overlap, serial preparation, 7-worker bound/backpressure, drain on failure, dedup, isolated empty preparation, worker rejection');
+})().catch(e=>{console.error(e);process.exitCode=1;});

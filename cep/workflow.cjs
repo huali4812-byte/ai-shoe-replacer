@@ -78,7 +78,7 @@ async function indexLibrary(root, progress, wantedProducts) {
         const skuHits=items.filter(i=>variants.some(s=>String(i.name||'').split('_')[0].toUpperCase()===s.toUpperCase()));
         const hits=skuHits.filter(i=>{const parts=String(i.name||'').split('_');return colorMatch(parts[1],p.color);});
         const cutouts=hits.filter(i=>/_t_side$/i.test(i.name)&&i.ext.toLowerCase()==='png');
-        const refs=hits.filter(i=>/_t_(logo|sideright|sole)$/i.test(i.name));
+        const refs=hits.filter(i=>/_t_(logo|sideright|sole|back|heel)$/i.test(i.name));
         const file=i=>path.join(root,'images',i.id+'.info',i.name+'.'+i.ext);
         const reason=cutouts.length!==1?'透明侧面素材需唯一，实际 '+cutouts.length:!refs.length?'缺少参考图':'';
         diagnostics.push(p.sku+' / '+p.color+'：变体['+variants.join(',')+']，查询['+queryStats.join(',')+']，合并 '+items.length+' 条，货号匹配 '+skuHits.length+' 条，同色 '+hits.length+' 条，'+(reason||'分组成功'));
@@ -88,7 +88,7 @@ async function indexLibrary(root, progress, wantedProducts) {
         const files=[cutouts[0]].concat(refs).map(file);
         const missing=files.filter(f=>!fs.existsSync(f));
         if(missing.length){diagnostics.push('原文件不可访问：'+missing.join('；'));continue;}
-        groups.push({id:p.sku+'|'+p.color,sku:p.sku,color:p.color,cutout:files[0],references:files.slice(1),source:'Eagle API'});
+        groups.push({id:p.sku+'|'+p.color,sku:p.sku,color:p.color,cutout:require('./reference-cache.cjs').snapshot(files[0]),references:files.slice(1).map(f=>require('./reference-cache.cjs').snapshot(f)),source:'Eagle API'});
       }
       if(!groups.length)throw Error(diagnostics.join('；'));
       return groups;

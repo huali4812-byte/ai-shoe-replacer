@@ -8,14 +8,23 @@ async function run({api,task,prompt,maskFirst=false,options={},record=()=>{}}){
  try{
   const plan=references.plan(task.material,{view:'unknown'});
   task.referencePlan=plan;log.references=plan;
+  const isolatedShoe=task.shoeCount===1&&!!task.visionMask;
+  if(isolatedShoe&&!maskFirst){maskFirst=true;prompt+='\n【实际输入顺序修正，以此为准】图1原场景，图2黑白编辑蒙版，图3起才是目标参考。仅白色区域的一只鞋允许修改；裁切中其他鞋只作位置背景，不参与本次换鞋。';}
+  log.isolatedShoe=isolatedShoe;
+  if(isolatedShoe)prompt+='\n【本只鞋侧面结构必须成套对应】先独立辨认蒙版内这一只鞋的可见面。魔术贴固定端/回折端/贴合端、侧片形状、缝线、凸起和侧面Logo必须共同取自目标同一对应面；不能内侧连接端配外侧凸起，不能为了与邻鞋一致统一成同一种侧面。鞋底参考仅用于可见底面。不依据邻鞋结构替本鞋选侧，不新增另一面的魔术贴端。';
   if(maskFirst&&!task.visionMask)throw Error('缺少编辑蒙版');
   const refs=(maskFirst?[task.visionMask]:[]).concat(plan.files);
   const logoFiles=new Set([...(task.material.logoReferences||[]),...plan.entries.filter(e=>e.detail==='logo').map(e=>e.file)]);
   const logoReferenceIndices=refs.map((file,i)=>logoFiles.has(file)&&file!==task.visionMask?i:-1).filter(i=>i>=0);
   log.logoReferenceIndices=logoReferenceIndices;
-  const guide=referenceGuide.build(plan.files,{maskFirst});log.referenceGuide=guide;
+  const soleFiles=new Set(plan.entries.filter(e=>e.view==='sole'&&e.detail==='sole').map(e=>e.file));
+  const soleReferenceIndices=refs.map((file,i)=>soleFiles.has(file)&&file!==task.visionMask?i:-1).filter(i=>i>=0);
+  log.soleReferenceIndices=soleReferenceIndices;
+  log.soleStatus=soleReferenceIndices.length?'dedicated_reference_bound':'no_dedicated_reference';
+  const soleGuide=soleReferenceIndices.length?'\n【鞋底参考图号】'+soleReferenceIndices.map(i=>'图'+(i+2)).join('、')+'为本次目标鞋底专用参考。只为原场景实际可见的外底提供分区、连接结构、颗粒/沟槽及配色依据，不用于鞋面或中底侧墙，不改变姿态露出原本不可见的底面。':'';
+  const guide=referenceGuide.build(plan.files,{maskFirst,entries:plan.entries});log.referenceGuide=guide;
   const row={attempt:1,strategy:'full',status:'generating'};log.attempts.push(row);record(log);
-  row.output=await api.generate(task.input,refs,prompt+INLINE_INSTRUCTIONS+guide.text,{...options,logoReferenceIndices,maxAttempts:1});
+  row.output=await api.generate(task.input,refs,prompt+INLINE_INSTRUCTIONS+guide.text+soleGuide,{...options,logoReferenceIndices,soleReferenceIndices,maxAttempts:1});
   row.status='received';log.status='received';record(log);return row.output;
  }catch(e){log.status='failed';log.error=e.message;record(log);throw e;}
 }

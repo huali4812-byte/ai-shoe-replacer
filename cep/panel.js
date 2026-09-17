@@ -3,16 +3,18 @@
   let fs,path,os,api,flow,folder,vision;
   try {const req=typeof require==='function'?require:window.cep_node.require;fs=req('fs');path=req('path');os=req('os');folder=path.dirname(decodeURIComponent(location.pathname));api=req(path.join(folder,'api.cjs'));flow=req(path.join(folder,'workflow.cjs'));vision=req(path.join(folder,'vision.cjs'));}
   catch(e){$('message').textContent='无法加载本机模块：'+e.message;return;}
+  const failureLog=(typeof require==='function'?require:window.cep_node.require)(path.join(folder,'failure-log.cjs'));
+  function recordFailure(e,stage,t){const r=failureLog.failure(e,{stage,taskId:t&&t.id,documentId:t&&t.documentId,layerId:t&&t.layerId,output:t&&t.preview});if(r.logWriteFailed)console.error('错误日志无法落盘，请复制当前错误信息');return r;}
   const state={scan:null,products:[],materials:[],tasks:[],busy:false,targetSku:'',theme:localStorage.getItem('shoe-theme')==='dark'?'dark':'light'};
   function applyTheme(){document.body.dataset.theme=state.theme;$('themeToggle').textContent=state.theme==='dark'?'☀ 白天':'☾ 夜间';}
 const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
-  function host(method,args){return new Promise((resolve,reject)=>cs.evalScript('AI_Shoe_CEP.dispatch('+JSON.stringify(method)+','+JSON.stringify(args||{})+')',raw=>{try{if(!raw||!String(raw).trim())throw Error('Photoshop 未返回结果，可能是脚本异常或插件未重载');const r=JSON.parse(raw);if(!r.ok)throw Error(r.error);resolve(r.data);}catch(e){reject(e);}}));}
+  function host(method,args){return new Promise((resolve,reject)=>cs.evalScript('AI_Shoe_CEP.dispatch('+JSON.stringify(method)+','+JSON.stringify(args||{})+')',raw=>{try{if(!raw||!String(raw).trim())throw Error('Photoshop 未返回结果，可能是脚本异常或插件未重载');const r=JSON.parse(raw);if(!r.ok)throw Error(r.error);resolve(r.data);}catch(e){recordFailure(e,'photoshop:'+method,args);reject(e);}}));}
   // Presentation state only; never used to decide generation or writeback.
   const expandedTaskPaths=new Set();
   let batchStage='';
   function showBatchStage(text){batchStage=text;message(text);}
   function message(t){$('message').textContent=t;}
-  async function act(fn,uiLabel){if(state.busy)return;state.busy=true;if(uiLabel)showBatchStage(uiLabel);try{render();await fn();}catch(e){message('操作失败：'+e.message);}finally{state.busy=false;batchStage='';try{render();}catch(e){message('面板刷新失败：'+e.message);}}}
+  async function act(fn,uiLabel){if(state.busy)return;state.busy=true;if(uiLabel)showBatchStage(uiLabel);try{render();await fn();}catch(e){recordFailure(e,'panel_action');message('操作失败：'+e.message+'；日志：'+(e.failureLog||'写入失败，请复制错误'));}finally{state.busy=false;batchStage='';try{render();}catch(e){recordFailure(e,'render');message('面板刷新失败：'+e.message);}}}
   function button(text,fn,disabled){const b=document.createElement('button');b.textContent=text;b.disabled=state.busy||disabled;b.onclick=()=>act(fn);return b;}
   let revisions;
   const revisionForms=new Map();
@@ -79,7 +81,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         const visionFolder=path.join(dir,'vision',t.id);
         fs.mkdirSync(visionFolder,{recursive:true});
         t.status='本地检测与分割鞋部（首次加载模型可能较慢）';showBatchStage('正在识别鞋部 · 图层 '+t.layerId+'（首次加载模型可能较慢）');render();
-        const visionResult=await vision.request({action:'detect',source:t.protection.sourceFile,folder:visionFolder,roleMarkers:t.dualRole?t.protection.roleMarkers:null,sceneType:t.protection.sceneType});
+        const visionResult=await vision.request({action:'detect',source:t.protection.sourceFile,folder:visionFolder,roleMarkers:t.dualRole?t.protection.roleMarkers:null,randomPairRoles:!!t.dualRole&&!!t.protection.randomPairRoles,randomMainPair:t.protection.randomMainPair,sceneType:t.protection.sceneType});
         fs.writeFileSync(path.join(visionFolder,'detection.json'),JSON.stringify(visionResult,null,2));
         if(!visionResult.regions||!visionResult.regions.length)throw Error('自动检测未找到鞋部：'+(visionResult.status||'unknown'));
         t.detectionWarnings=visionResult.detections.filter(d=>d.skip).map(d=>d.skip);
@@ -107,7 +109,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       if(!t.children&&!t.exported){await host('exportSmart',{id:t.id,output:t.input});t.exported=true;}
       t.phase='queued';t.status='鞋位准备完成，待生成';
       return t.children||[t];
-    }catch(e){t.prepareError=e.message;t.phase='prepare_failed';t.status='导出失败：'+e.message;throw e;}
+    }catch(e){recordFailure(e,'prepare',t);t.prepareError=e.message;t.phase='prepare_failed';t.status='导出失败：'+e.message;throw e;}
   }
   async function retryPreparation(t){
     const dir=path.join(os.homedir(),'Pictures','AI-Shoe-Preview','retry-'+Date.now());
@@ -117,7 +119,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
   }
   async function retryDetection(t){
     const folder=path.join(path.dirname(t.protection.sourceFile),'review-'+t.id+'-'+Date.now());fs.mkdirSync(folder,{recursive:true});
-    const result=await vision.request({action:'detect',source:t.protection.sourceFile,folder,roleMarkers:t.dualRole?t.protection.roleMarkers:null,sceneType:t.protection.sceneType});
+    const result=await vision.request({action:'detect',source:t.protection.sourceFile,folder,roleMarkers:t.dualRole?t.protection.roleMarkers:null,randomPairRoles:!!t.dualRole&&!!t.protection.randomPairRoles,randomMainPair:t.protection.randomMainPair,sceneType:t.protection.sceneType});
     fs.writeFileSync(path.join(folder,'detection.json'),JSON.stringify(result,null,2));
     const key=r=>maskKey({...r,role:r.role||t.role});
     const byKey=new Map((result.regions||[]).map(r=>[key(r),r]));
@@ -163,7 +165,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         if(inspection.rows[i].slots.some(s=>s.fitMode==='source_subject_pending')){
           inspection.rows[i]=await svc.resolveSubjectFrames(inspection.rows[i],$('libraryPath').value.trim());
         }
-      }catch(e){inspection.rows[i].error='自动定位展示范围失败：'+e.message;}
+      }catch(e){recordFailure(e,'display_localization',t);inspection.rows[i].error='自动定位展示范围失败：'+e.message;}
     }
     const skuProducts=state.products.filter(p=>p.sku.trim()===state.targetSku);
     const uniqueProducts=[];const seenProducts=new Set();
@@ -196,10 +198,10 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       const plan=svc.makePlan(row,product,t.displayMaterials);svc.verifyPlan(plan);
       row.result=await host('applyProductDisplayRow',{id:t.id,documentId:t.documentId,layerId:t.layerId,plan,contentFile:path.join(dir,t.id+'-row-'+row.id+'-'+Date.now()+'.psb')});
       row.plan=plan;row.written=true;row.status='三视角已回写，待视觉验收';writes++;
-    }catch(e){row.status='产品展示待确认：'+e.message;}render();}
+    }catch(e){recordFailure(e,'product_display',t);row.status='产品展示待确认：'+e.message;}render();}
     t.written=t.displayRows.length>0&&t.displayRows.every(r=>r.written);
     t.status=t.written?'产品展示全部展示行已回写，待验收':'产品展示部分未完成，请查看各行原因';
-    try{fs.writeFileSync(path.join(dir,t.id+'-product-display.json'),JSON.stringify(t,null,2));}catch(e){t.status+='；回写记录保存失败：'+e.message;}return writes;
+    try{fs.writeFileSync(path.join(dir,t.id+'-product-display.json'),JSON.stringify(t,null,2));}catch(e){recordFailure(e,'report_write',t);t.status+='；回写记录保存失败：'+e.message;}return writes;
   }
   async function updateDisplayTitle(t,row){
     const product=state.products.find(p=>p.id===row.productId&&p.sku.trim()===state.targetSku);
@@ -274,15 +276,15 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         const allWritten=plan.slots.every(slot=>row.slotResults[slot.id]&&row.slotResults[slot.id].written);
         if(allWritten&&t.displayScope==='row'){row.phase='update_title';await updateDisplayTitle(t,row);}
         row.written=allWritten;row.status=allWritten?'AI 已生成并直接写入；款式、颜色和版式待验收':'部分槽位未完成，请查看失败阶段';if(allWritten)writes++;
-      }catch(e){row.failure={phase:row.phase,message:e.message,stack:e.stack};row.status='产品展示 '+row.phase+' 失败：'+e.message;}
+      }catch(e){recordFailure(e,'display_legacy',t);row.failure={phase:row.phase,message:e.message,stack:e.stack};row.status='产品展示 '+row.phase+' 失败：'+e.message;}
       render();
     }
     t.written=t.displayRows.length>0&&t.displayRows.every(r=>r.written);
     t.status=t.written?'产品展示 AI 已直接写入；效果待验收':'产品展示部分未完成，请查看各行原因';
-    try{fs.writeFileSync(path.join(dir,t.id+'-product-display-ai.json'),JSON.stringify(t,null,2));}catch(e){t.status+='；记录保存失败：'+e.message;}
+    try{fs.writeFileSync(path.join(dir,t.id+'-product-display-ai.json'),JSON.stringify(t,null,2));}catch(e){recordFailure(e,'report_write',t);t.status+='；记录保存失败：'+e.message;}
     return writes;
   }
-  function matchAll(){state.tasks.forEach(t=>{if(t.region)return;t.material=null;if(!t.product)return;try{t.material=flow.matchMaterial(state.materials,t.product);if(t.dualRole){t.roleMaterials={};for(const role of ['主推','次推'])t.roleMaterials[role]=flow.matchMaterial(state.materials,t.roleProducts[role]);}t.status=t.dualRole?'待读取内部主推／次推标注':'待处理';}catch(e){t.material=null;t.status='已跳过：'+e.message;}});}
+  function matchAll(){state.tasks.forEach(t=>{if(t.region)return;t.material=null;if(!t.product)return;try{t.material=flow.matchMaterial(state.materials,t.product);if(t.dualRole){t.roleMaterials={};for(const role of ['主推','次推'])t.roleMaterials[role]=flow.matchMaterial(state.materials,t.roleProducts[role]);}t.status=t.dualRole?'按内部标注分配；无标注时随机分配两双':'待处理';}catch(e){failureLog.event('task_blocked',{taskId:t.id,stage:'material_binding',message:e.message});t.material=null;t.status='已跳过：'+e.message;}});}
   function render(){
     $('batch').disabled=state.busy;
     $('batch').textContent=batchStage?'正在处理…':state.busy?'请等待当前操作…':'开始批量换鞋';
@@ -374,21 +376,25 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     // Window layout is optional; failure must not discard prepared or paid results.
     let comparison;
     try{comparison=await host('arrangeComparison',{documentId:state.scan.documentId});}
-    catch(e){comparison={arranged:false,reason:'自动双联垂直未完成：'+e.message};}
+    catch(e){recordFailure(e,'comparison');comparison={arranged:false,reason:'自动双联垂直未完成：'+e.message};}
     $('doc').textContent=state.scan.document+' ｜工作副本'+(comparison.arranged?' ｜双联垂直':(' ｜'+comparison.reason));
     const dir=path.join(os.homedir(),'Pictures','AI-Shoe-Preview',String(Date.now()));fs.mkdirSync(dir,{recursive:true});
     let displayWrites=0;
-    for(const t of displays){try{displayWrites+=await applyDisplay(t,dir);}catch(e){t.status='产品展示素材替换失败：'+e.message;}render();}
+    for(const t of displays){try{displayWrites+=await applyDisplay(t,dir);}catch(e){recordFailure(e,'product_display',t);t.status='产品展示素材替换失败：'+e.message;}render();}
     fs.mkdirSync(VISION_FOLDER,{recursive:true});
-    const exported=[];
-    for(const t of ready){if(t.children){exported.push(...t.children);continue;}if(t.manualRegion||t.preview||t.exported){exported.push(t);continue;}try{
-      exported.push(...await prepareShoeTask(t,dir));
-    }catch(e){t.status='导出失败：'+e.message;}render();}
-    showBatchStage('正在准备鞋位图像');
-    for(const t of exported){if(t.exported)continue;try{await host('exportSmart',{id:t.id,output:t.input});t.exported=true;}catch(e){t.status='区域导出失败：'+e.message;}render();}
-    const runnable=exported.filter(t=>t.exported===true);
-    let next=0;
-    async function worker(){while(next<runnable.length){const t=runnable[next++];if(t.preview||t.written||t.previewValidation==='invalid'||t.generationState==='no_result')continue;try{
+    const blockedGeneration=new Set();
+    async function prepareParent(t){
+      let regions;
+      try{regions=t.children||(t.manualRegion||t.preview||t.exported?[t]:await prepareShoeTask(t,dir));}
+      catch(e){recordFailure(e,'export',t);t.status='导出失败：'+e.message;render();return [];}
+      // Finish every region export for this parent before releasing any generation.
+      for(const r of regions){if(r.exported)continue;try{await host('exportSmart',{id:r.id,output:r.input});r.exported=true;}catch(e){recordFailure(e,'export_region',r);r.status='区域导出失败：'+e.message;}render();}
+      if(regions.some(r=>r.exported!==true)){
+        for(const r of regions){blockedGeneration.add(r);if(r.exported&&!r.preview&&!r.written)r.status='同图区域导出未完成，暂不生成';}
+      }
+      render();return regions;
+    }
+    async function generateRegion(t){if(blockedGeneration.has(t)||t.exported!==true||t.preview||t.written||t.previewValidation==='invalid'||t.generationState==='no_result')return;try{
       t.generationState='requesting';t.phase='generating';t.status='AI 生成中';render();
       const subject=t.shoeCount>1?'画面中蒙版覆盖的 '+t.shoeCount+' 只原鞋':'原鞋';
       const prompt=(t.dualRole?'第一张图是原始局部画面，第二张是同坐标黑白目标蒙版：仅白色区域中的鞋属于本次'+t.role+'目标，黑色区域内其他人的鞋保持不变；第三张及之后才是目标鞋参考图。蒙版不是鞋款参考，不要把蒙版画进输出。':'第一张图是包含原鞋的局部画面，其余为目标鞋参考图。')+'输出必须是与第一张输入完全相同的正方形画布（1:1），禁止返回3:2或任何横向画布。把'+subject+'全部替换为 '+t.product.sku+' '+t.product.color+'。这是严格的姿态保持任务：逐只新鞋必须与对应原鞋使用完全相同的左右脚、鞋头指向、鞋跟指向、旋转角度、俯仰角、透视和可见鞋底面；原鞋鞋底朝向镜头时新鞋也必须显示鞋底，原鞋从后方或侧后方看到时新鞋也必须从同一方向看到，绝对禁止把侧面参考图直接套成侧面、禁止把鞋底翻转到另一只脚、禁止镜像。**必须保持原鞋当前可见的内侧/外侧不变：只使用目标参考中与原鞋同一内外侧的结构；外侧独有的中底Logo、侧面装饰、支撑片、凹槽、缝线不得出现在内侧，内侧也不得凭空生成外侧结构。无法确认参考图属于哪一侧时不得用旧鞋结构替代目标款式证据。**输出中必须有且只有 '+(t.shoeCount||1)+' 只新鞋，每只新鞋一一对应原鞋并严格保持原鞋的位置、朝向、大小、透视和遮挡关系，不得增加、删除、移动、镜像或重新排列鞋子。目标鞋的主色、辅色、鞋底颜色、鞋带/织带颜色必须严格以透明主素材和参考图为准，禁止自行补色、改色或套用常见品牌配色。Ginoble/logo 必须保持目标素材中原本的字形、位置、比例和颜色；是否有Logo以目标款对应部位为准，目标内侧本有Logo时必须保留；禁止错位、重复或跨侧复制。鞋面、鞋头、鞋侧和后跟的所有品牌 Logo/字标都属于必须还原的鞋体细节：优先参考对应角度的 Logo 特写，不要用其他角度或文字猜测替代；保持字形、拼写、方向、浮雕/凹陷关系、相对鞋面位置、大小、厚度、边缘清晰度和原本材质明暗。后跟 Logo 只能出现在后跟对应位置，鞋侧凹陷 Logo 只能沿鞋侧曲面透视，禁止把 Logo 移到鞋头、鞋带、提拉环或另一只鞋，禁止生成乱码、镜像、重复或不存在的品牌字样。鞋舌提拉环和后跟提拉环（pull tab）是鞋子的一部分：保持原鞋姿态和遮挡，提拉环数量、连接关系和形状按目标款对应视角确定，并严格使用目标鞋素材中的提拉环颜色与织带纹理；提拉环必须符合目标颜色和纹理，目标本身为红色时不得把红色当成残留；目标鞋没有提拉环时禁止新增，目标鞋有提拉环时禁止漏掉、复制、拉长、缩短、移到鞋外或在袜子/裤脚后方凭空生成。提拉环不能被误当作鞋带、鞋舌或另一只鞋。仅改变鞋和必要接触阴影，保持构图、比例、人物、衣物、袜子、背景、文字和未遮挡区域完全不变。';
@@ -408,12 +414,13 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
           record:log=>fs.writeFileSync(path.join(dir,t.id+'-auto-generation.json'),JSON.stringify(log,null,2))});
       }
       t.generationState='received';t.previewValidation='unvalidated';t.phase='unvalidated_preview';t.status='已取得结果，待本地验证';
-    }catch(e){t.generationState='no_result';t.generationError=e.message;t.phase='no_result';t.status='未取得可用结果：'+e.message+'；需明确点击重新生成';}render();}}
-    // AI 请求最多 7 并发；Photoshop 导出与回写仍保持串行。
-    showBatchStage('正在生成换鞋结果，请稍候');
-    const concurrency=7;
-    showBatchStage('AI 最多 7 并发；Photoshop 串行回写');
-    await Promise.all(Array.from({length:concurrency},worker));
+    }catch(e){recordFailure(e,'generation',t);t.generationState='no_result';t.generationError=e.message;t.phase='no_result';t.status='未取得可用结果：'+e.message+'；需明确点击重新生成';}render();}
+    // Overlap network generation with serial detection/export, never PS writeback.
+    showBatchStage('边识别边生成 · AI 最多 7 并发，完成后统一回写');
+    const pipelineRequire=typeof require==='function'?require:window.cep_node.require;
+    const exported=await pipelineRequire(path.join(folder,'batch-pipeline.cjs')).run({
+      parents:ready,prepare:prepareParent,generate:generateRegion,concurrency:7
+    });
     showBatchStage('正在验证生成结果并回写工作副本');
     let written=0,documentWrites=displayWrites;
     const groups=new Map();
@@ -437,7 +444,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
           if(!r.visionMask)continue;
           try{
             r.outputDiagnosis=await vision.request({action:'diagnose_result',stage:'local',source:r.input,generated:r.preview,mask:r.visionMask});
-          }catch(e){r.outputDiagnosis={stage:'local',error:e.message};}
+          }catch(e){recordFailure(e,'local_diagnosis',r);r.outputDiagnosis={stage:'local',error:e.message};}
           // Advisory only: compose_parent independently validates every region,
           // rejects invalid previews and preserves already-written results.
         }
@@ -468,7 +475,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         documentWrites++;
         for(const x of complete.filter(x=>!x.written)){x.writeResult=result;x.composition=composed;x.written=true;x.phase='written';x.status='已回写，待画面验收';written++;}
         if(parent){parent.markersHidden=hideRoleMarkers;parent.needsFinalize=false;}
-      }catch(e){for(const t of pending){if(t.previewValidation==='invalid')continue;t.writeError=e.message;t.status='未回写：'+e.message;}}
+      }catch(e){recordFailure(e,'writeback');for(const t of pending){if(t.previewValidation==='invalid')continue;t.writeError=e.message;t.status='未回写：'+e.message;}}
       if(parent)updateParent(parent);render();
     }
     ready.forEach(updateParent);
