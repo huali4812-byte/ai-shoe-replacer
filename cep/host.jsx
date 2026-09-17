@@ -485,6 +485,8 @@ var AI_Shoe_CEP = (function () {
         // Replace an independent parent instance so shared embedded contents cannot
         // leave the visible layer pointing at a stale/shared object.
         var originalTarget=find(t.parent.layers,t.layerId),target=null;
+        if(!originalTarget)throw Error('回写前找不到原目标智能对象');
+        var expectedGrouped=originalTarget.grouped;
         if(t.parentTargetId) target=find(t.parent.layers,t.parentTargetId);
         if(!target && t.parentKey && smartTaskParents[t.parentKey].parentTargetId){target=find(t.parent.layers,smartTaskParents[t.parentKey].parentTargetId);t.parentTargetId=target&&target.id;}
         if(!target){
@@ -506,9 +508,9 @@ var AI_Shoe_CEP = (function () {
         if(!originalTarget||target.id===originalTarget.id)throw Error('回写目标与原层身份异常');
         target.move(originalTarget,ElementPlacement.PLACEBEFORE);
         // Moving a layer can release its clipping mask. Restore clipping last.
-        target.grouped=originalTarget.grouped;
+        target.grouped=expectedGrouped;
         originalTarget.visible=false;
-        if(target.grouped!==originalTarget.grouped||originalTarget.visible)throw Error('回写剪贴关系或原层可见性校验失败');
+        if(target.grouped!==expectedGrouped||originalTarget.visible)throw Error('回写剪贴关系或原层可见性校验失败：目标层='+target.id+'，原层='+originalTarget.id+'，期望剪贴='+expectedGrouped+'，目标剪贴='+target.grouped+'，原层当前剪贴='+originalTarget.grouped+'，原层可见='+originalTarget.visible);
         target.visible=true; t.parent.activeLayer=target;
         try { app.refresh(); } catch(ignoreRefresh) {}
         t.patchGroupIds=newPatchGroups;

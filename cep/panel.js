@@ -334,6 +334,12 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       const details=document.createElement('p');details.textContent='图层 '+t.layerId+' · 鞋位 '+t.slot+' ｜区域 '+(t.region?t.region.box.join(', '):(t.children?'已确认 '+t.children.length+' 个区域':t.exportBox?t.exportBox.join(', '):'尚未检测'));row.appendChild(details);
       const assigned=document.createElement('p');assigned.textContent=t.product?'目标：'+t.product.sku+' | '+(t.dualRole?'主推 '+t.roleProducts['主推'].color+' ／次推 '+t.roleProducts['次推'].color:t.product.color+' | '+t.product.role):'目标：无唯一对应款色';row.appendChild(assigned);
       const status=document.createElement('p');status.textContent=(t.children?t.children.map((r,i)=>(r.shoeCount>1?'鞋组 ':'鞋部 ')+(i+1)+(t.dualRole?' '+r.role:'')+'：'+r.status).join('；'):t.status)+(t.detectionWarnings&&t.detectionWarnings.length?'；另有 '+t.detectionWarnings.length+' 个检测候选未通过校验，已跳过':'');row.appendChild(status);
+      const fullStatus=status.textContent||'';
+      if(/本地检测器退出|紫色多款图内部需|回写剪贴关系或原层可见性/.test(fullStatus)){
+        status.textContent=/请求超时600秒/.test(fullStatus)?'本地鞋位检测超过10分钟，尚未生图。可单独重新检测；不要重复整批生成。':/本地检测器退出/.test(fullStatus)?'本地检测进程退出，尚未生图。自动恢复情况见诊断详情。':/紫色多款图内部需/.test(fullStatus)?'未找到主推/次推款式文字：请检查智能对象内部标记。紫色表示多款，不只是两只鞋；若只有同一款鞋，请按目标角色重新标色并扫描。':'图片已生成，但Photoshop回写未通过。结果已保留，下次批量复用图片重试回写，不必重新生成。';
+        const diagnostics=document.createElement('details'),caption=document.createElement('summary'),body=document.createElement('pre');
+        caption.textContent='查看完整错误与诊断';body.textContent=fullStatus;body.style.whiteSpace='pre-wrap';body.style.wordBreak='break-word';body.style.maxHeight='180px';body.style.overflow='auto';diagnostics.appendChild(caption);diagnostics.appendChild(body);row.appendChild(diagnostics);
+      }
       row.appendChild(button('定位图层',async()=>{await host('selectLayer',t);message('已定位图层，等待鞋位选区');},!state.scan.working||!!t.region));
       if(!t.children&&!t.written&&!t.preview&&(t.phase==='prepare_failed'||/^导出失败：/.test(t.status||''))){
         row.appendChild(button('重新导出并检测（不生成）',async()=>{await retryPreparation(t);},!state.scan.working||!t.material||!t.product));

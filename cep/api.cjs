@@ -94,7 +94,12 @@ async function generate(original, references, prompt, options = {}) {
   const c=config(); if(!references.length) throw Error('请选择目标鞋参考图');
   const started=Date.now();
   const content=[{type:'text',text:prompt}];
-  for(const file of [original].concat(references)){const ext=path.extname(file).toLowerCase(),mime={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg'}[ext];if(!mime)throw Error('原图和参考图仅支持 PNG/JPEG');const raw=prepareImage(file);content.push({type:'image_url',image_url:{url:'data:'+(raw[0]===137?'image/png':'image/jpeg')+';base64,'+raw.toString('base64')}});}
+  for(const [imageIndex,file] of [original].concat(references).entries()){const ext=path.extname(file).toLowerCase(),mime={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg'}[ext];if(!mime)throw Error('原图和参考图仅支持 PNG/JPEG');let raw;
+    if(imageIndex>0&&(options.logoReferenceIndices||[]).includes(imageIndex-1)){
+      try{const prepared=require('./logo-reference.cjs').prepare(file);raw=prepared.bytes;log('logo_reference_prepared',{referenceIndex:imageIndex-1,...prepared.info});}
+      catch(e){log('logo_reference_fallback',{referenceIndex:imageIndex-1,reason:e.message});}
+    }
+    if(!raw)raw=prepareImage(file);content.push({type:'image_url',image_url:{url:'data:'+(raw[0]===137?'image/png':'image/jpeg')+';base64,'+raw.toString('base64')}});}
   const inputBytes=[original].concat(references).reduce((n,f)=>n+fs.statSync(f).size,0);
   const requestedAspect=options.aspectRatio||aspectRatio(original);
   const payload=JSON.stringify({model:c.model,messages:[{role:'user',content}],extra_body:{google:{image_config:{aspect_ratio:requestedAspect}}}});

@@ -1,16 +1,38 @@
-const fs=require('fs'),path=require('path'),os=require('os'),cp=require('child_process');
-let child=null, pending=null, buffer='', tail='', queue=Promise.resolve();
+const fs=require('fs'),path=require('path'),cp=require('child_process');
+let child=null,pending=null,queue=Promise.resolve(),generation=0;
 function start(){
-  const config=JSON.parse(fs.readFileSync(path.join(__dirname,'vision-runtime.json'),'utf8'));
-  if(!fs.existsSync(config.python))throw Error('缺少本地视觉运行环境：'+config.python);
-  if(!['arm64','x86_64'].includes(config.architecture))throw Error('视觉环境缺少有效 architecture 配置');
-  buffer='';tail='';
-  child=cp.spawn('/usr/bin/arch',['-'+config.architecture,config.python,'-u',path.join(__dirname,'vision.py')],{env:{...process.env,HF_HUB_OFFLINE:'1',TOKENIZERS_PARALLELISM:'false'},stdio:['pipe','pipe','pipe']});
-  child.stdout.on('data',chunk=>{buffer+=chunk;let n;while((n=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,n);buffer=buffer.slice(n+1);if(!pending)continue;try{const r=JSON.parse(line),p=pending;pending=null;clearTimeout(p.timer);r.ok?p.resolve(r.data):p.reject(Error(r.error));}catch(e){const p=pending;pending=null;if(p){clearTimeout(p.timer);p.reject(Error('检测器返回无效数据'));}}}});
-  child.stderr.on('data',c=>{tail=(tail+c).slice(-3000);});
-  const fail=e=>{child=null;if(pending){clearTimeout(pending.timer);pending.reject(Error('本地检测器退出：'+e+' '+tail));pending=null;}};
-  child.on('error',e=>fail(e.message));child.on('exit',(code)=>fail('exit '+code));
+ const config=JSON.parse(fs.readFileSync(path.join(__dirname,'vision-runtime.json'),'utf8'));
+ if(!fs.existsSync(config.python))throw Error('缺少本地视觉运行环境：'+config.python);
+ if(!['arm64','x86_64'].includes(config.architecture))throw Error('视觉环境缺少有效 architecture 配置');
+ const proc=cp.spawn('/usr/bin/arch',['-'+config.architecture,config.python,'-u',path.join(__dirname,'vision.py')],{env:{...process.env,HF_HUB_OFFLINE:'1',TOKENIZERS_PARALLELISM:'false'},stdio:['pipe','pipe','pipe']});
+ child=proc;let buffer='',tail='',failed=false;
+ const fail=(reason,retryable=true)=>{
+  if(failed)return;failed=true;
+  if(child===proc)child=null;
+  if(pending&&pending.proc===proc){const p=pending;pending=null;clearTimeout(p.timer);p.reject(Object.assign(Error('本地检测器退出：'+reason+' '+tail),{detectorExited:retryable}));}
+ };
+ proc.fail=fail;
+ proc.stdout.on('data',chunk=>{if(failed)return;buffer+=chunk;let n;while((n=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,n);buffer=buffer.slice(n+1);if(!pending||pending.proc!==proc)continue;const p=pending;pending=null;clearTimeout(p.timer);try{const r=JSON.parse(line);r.ok?p.resolve(r.data):p.reject(Error(r.error));}catch(e){p.reject(Error('检测器返回无效数据'));fail('协议失步',false);proc.kill();}}});
+ proc.stderr.on('data',c=>{tail=(tail+c).slice(-3000);});
+ proc.on('error',e=>fail(e.message));
+ proc.on('exit',(code,signal)=>fail('code='+code+' signal='+(signal||'none')));
+ proc.stdin.on('error',e=>{fail('stdin '+e.message);proc.kill();});
+ return proc;
 }
-function request(data){const run=()=>new Promise((resolve,reject)=>{try{if(!child)start();pending={resolve,reject,timer:setTimeout(()=>{if(child)child.kill();},600000)};child.stdin.write(JSON.stringify(data)+'\n');}catch(e){reject(e);}});const result=queue.then(run);queue=result.catch(()=>{});return result;}
-function close(){if(child)child.kill();}
+function once(data){return new Promise((resolve,reject)=>{
+ let proc;
+ try{proc=child||start();pending={proc,resolve,reject,timer:setTimeout(()=>{proc.fail('请求超时600秒',false);proc.kill();},600000)};
+ proc.stdin.write(JSON.stringify(data)+'\n',e=>{if(e){proc.fail('write '+e.message);proc.kill();}});
+ }catch(e){if(pending&&pending.proc===proc){clearTimeout(pending.timer);pending=null;}reject(e);}
+});}
+function request(data){const epoch=generation;const run=async()=>{
+ if(epoch!==generation)throw Error('视觉请求已取消');
+ try{return await once(data);}catch(e){
+  if(data.action!=='detect'||!e.detectorExited||epoch!==generation)throw e;
+  console.warn('[vision] 检测进程退出，自动重启一次（不调用生图）');
+  try{const result=await once(data);return {...result,detectorRecovery:{attempts:2,previousError:e.message}};}
+  catch(second){throw Error(second.message+'；检测自动恢复一次仍失败；首次：'+e.message);}
+ }
+ };const result=queue.then(run);queue=result.catch(()=>{});return result;}
+function close(){generation++;if(child){const proc=child;proc.fail('主动关闭',false);proc.kill();}}
 module.exports={request,close};

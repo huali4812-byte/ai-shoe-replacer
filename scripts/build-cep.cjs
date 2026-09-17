@@ -3,7 +3,7 @@ const root=path.resolve(__dirname,'..');
 const version='0.3.2', name='AI-Shoe-PS2024-'+version;
 const output=path.join(root,'outputs',name);
 fs.mkdirSync(path.join(output,'cep'),{recursive:true});
-const files=['index.html','panel.js','product-display.cjs','reference-plan.cjs','shoe-evidence.cjs','auto-generation.cjs','detail-routing.cjs','detail_patch.py','revisions.cjs','host.jsx','api.cjs','workflow.cjs','vision.cjs','vision.py','vision-runtime.json','CSInterface.js','styles.css','CSXS/manifest.xml'];
+const files=['index.html','panel.js','product-display.cjs','reference-plan.cjs','reference-guide.cjs','logo-reference.cjs','shoe-evidence.cjs','auto-generation.cjs','detail-routing.cjs','detail_patch.py','revisions.cjs','host.jsx','api.cjs','workflow.cjs','vision.cjs','vision.py','vision-runtime.json','CSInterface.js','styles.css','CSXS/manifest.xml'];
 for(const f of files){const dest=path.join(output,'cep',f);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(root,'cep',f),dest);}
 fs.copyFileSync(path.join(root,'cep/rules.cjs'),path.join(output,'cep/rules.cjs'));
 fs.cpSync(path.join(root,'cep/vendor'),path.join(output,'cep/vendor'),{recursive:true});

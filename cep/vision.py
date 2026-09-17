@@ -48,6 +48,31 @@ def group_nearby_regions(regions):
     return groups
 
 
+def generation_groups(regions, structure=False):
+    """One detected shoe per generation, never split by connected components.
+
+    Structure diagrams retain the existing grouped path. Role assignment happens
+    before this step and is not inferred from crop position.
+    """
+    return group_nearby_regions(regions) if structure else [[r] for r in regions]
+
+
+def validate_shoe_supports(size, regions):
+    """Reject ambiguous expanded write ownership rather than overwrite a shoe."""
+    occupied = np.zeros((size[1], size[0]), dtype=bool)
+    for region in regions:
+        box = region['box']
+        mask = Image.open(region['mask']).convert('L')
+        if mask.size != (box[2]-box[0], box[3]-box[1]) or not mask.getbbox():
+            raise ValueError('单鞋蒙版为空或尺寸不一致')
+        full = Image.new('L', size, 0)
+        full.paste(mask.filter(ImageFilter.MaxFilter(9)), tuple(box[:2]))
+        support = np.array(full) > 0
+        if np.any(support & occupied):
+            raise ValueError('单鞋扩展蒙版重叠，无法安全独立生成；请重新检测鞋位')
+        occupied |= support
+
+
 def marker_role(box, markers):
     """Use annotation proximity only when the competing role is clearly farther."""
     cx, cy = (box[0]+box[2])/2, (box[1]+box[3])/2
@@ -573,7 +598,7 @@ class Vision:
                 for item in accepted:
                     detections[item['index']]['skip'] = 'role_assignment_uncertain'
                 accepted = []
-        for group_index, group in enumerate(group_nearby_regions(accepted)):
+        for group_index, group in enumerate(generation_groups(accepted, structure)):
             full = np.zeros((original.height, original.width), dtype=bool)
             bounds = [original.width, original.height, 0, 0]
             for item in group:
@@ -607,6 +632,9 @@ class Vision:
                                       'score':min(item['score'] for item in group),
                                       'segmentationScore':min(item['segmentationScore'] for item in group)})
             overlay.paste(Image.new('RGB',original.size,(255,0,80)),(0,0),Image.fromarray((full*100).astype('uint8')))
+        if not structure:
+            validate_shoe_supports(original.size, report['regions'])
+            report['generationMode'] = 'individual_shoes'
         draw = ImageDraw.Draw(overlay)
         for index, detection in enumerate(detections):
             if detection.get('skip'):

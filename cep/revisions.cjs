@@ -32,7 +32,7 @@ function createRevisions({api,vision,host,root}) {
       if(local){v.preview=path.join(folder,'reused'+path.extname(r.preview));fs.copyFileSync(r.preview,v.preview);}
       else{
         const prompt='第一张是换鞋前的原始局部图，第二张是同坐标黑白蒙版，仅白色鞋位允许修改，后面是目标鞋参考图。将蒙版内 '+(r.shoeCount||1)+' 只鞋替换为 '+r.product.sku+' '+r.product.color+'（'+r.role+'）。必须保留原图画布尺寸和1:1比例、逐只鞋的位置、左右脚、鞋尖方向、透视、大小及前后遮挡；严格遵循参考鞋款、配色、Logo和纹理。鞋面、鞋头、鞋侧和后跟的品牌 Logo/字标必须按对应角度参考图还原，保持正确拼写、方向、位置、大小、浮雕或凹陷质感与透视；禁止乱码、镜像、重复、移位或生成不存在的字样，禁止把后跟Logo放到鞋侧或把鞋侧Logo放到鞋头。鞋舌提拉环和后跟提拉环（pull tab）必须先擦除原提拉环，不能保留与目标款不符的旧颜色或纹理，目标拉环本身为红色时红色合法，再按目标鞋素材重绘真实的数量、位置、连接关系、尺寸、朝向、颜色、边缘包缝和织带纹理；目标鞋无提拉环时禁止新增，有提拉环时禁止漏掉、复制或移位，禁止把提拉环误当作鞋带、鞋舌或另一只鞋。其他人物、鞋、腿、袜子、文字和背景保持不变，禁止把蒙版画入输出。此次重点：'+reason+'。补充要求：'+note;
-        const edit={...r,input:copies[0],visionMask:copies[1],material:{cutout:copies[2],references:copies.slice(3)}};
+        const edit={...r,input:copies[0],visionMask:copies[1],material:{cutout:copies[2],references:copies.slice(3),logoReferences:originals.map((file,i)=>i>=2&&(require('./reference-plan.cjs').classify(file).detail==='logo'||(r.material.logoReferences||[]).includes(file))?copies[i]:null).filter(Boolean)}};
         v.status='generating';record(v);v.preview=await generation.run({api,task:edit,prompt,maskFirst:true,options:{taskId:r.id+'-'+v.id,aspectRatio:'1:1',validateAspect:true},record:log=>{v.generation=log;record(v);}});
 
       }

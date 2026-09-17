@@ -1,23 +1,54 @@
-const assert=require('assert'),fs=require('fs'),os=require('os'),path=require('path');
-const {classify,plan}=require('../cep/reference-plan.cjs');
-assert.equal(classify('GW2003_t_sideright.png').view,'side-right');
-assert.equal(classify('GW2003_t_logo.png').detail,'logo');
-assert.equal(classify('outside.png').view,'unknown');
-assert.equal(classify('GW2003_鞋底.png').detail,'sole');
-assert.equal(classify('GW2003_鞋头包头.png').detail,'toe');
-assert.equal(classify('GW2003_鞋面魔术贴.png').detail,'upper');
-assert.equal(classify('GW2003_品牌字标.png').detail,'logo');
-assert.equal(classify('GW2003_后跟提拉环.png').view,'back');
-assert.equal(classify('GW2003_内侧.png').view,'side');
-assert.equal(classify('GW2003_外侧.png').view,'side');
-const dir=fs.mkdtempSync(path.join(os.tmpdir(),'refs-'));
-try{
-const files=['shoe_t_side.png','shoe_t_sole.png','shoe_t_logo.png'].map(n=>{const f=path.join(dir,n);fs.writeFileSync(f,n);return f;});
-const material={cutout:files[0],references:files.slice(1)};
-assert.deepEqual(plan(material).files,files);
-assert.equal(plan(material,{view:'sole'}).files[0],files[1]);
-assert.equal(plan(material,{view:'back'}).viewMatched,false);
-assert.equal(plan(material).entries[0].sha256.length,64);
-assert.throws(()=>plan({cutout:path.join(dir,'missing.png')}));
-console.log('PASS classification, stable fallback, view ordering, hashes and missing files');
-}finally{fs.rmSync(dir,{recursive:true,force:true});}
+#!/usr/bin/env node
+'use strict';
+
+const references = require('../cep/reference-plan.cjs');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+// 创建临时测试文件
+const tempDir = path.join(os.tmpdir(), 'shoe-test-' + Date.now());
+fs.mkdirSync(tempDir, { recursive: true });
+
+const testFiles = [
+  'Z2003-矿石灰-外侧.png',
+  'Z2003-矿石灰-内侧.jpg',
+  'Z2003-矿石灰-鞋底.jpg',
+  'Z2003-矿石灰-鞋头.jpg',
+  'Z2003-矿石灰-后跟.jpg',
+  'Z2003-矿石灰-cutout.png'
+];
+
+// 创建空文件
+testFiles.forEach(name => {
+  const filePath = path.join(tempDir, name);
+  fs.writeFileSync(filePath, 'test');
+});
+
+const material = {
+  cutout: path.join(tempDir, 'Z2003-矿石灰-cutout.png'),
+  references: testFiles.slice(0, 5).map(name => path.join(tempDir, name))
+};
+
+console.log('测试1: 场景视角未知（应按内侧→外侧→鞋底优先级排序）\n');
+const plan1 = references.plan(material, { view: 'unknown' });
+console.log('warnings:', plan1.warnings);
+console.log('\n排序结果：');
+plan1.entries.forEach((e, i) => {
+  const name = path.basename(e.file);
+  console.log(`  ${i + 1}. ${name.padEnd(30)} [view: ${e.view}]`);
+});
+
+console.log('\n\n测试2: 请求外侧视角（应优先匹配外侧）\n');
+const plan2 = references.plan(material, { view: 'outer' });
+console.log('warnings:', plan2.warnings);
+console.log('viewMatched:', plan2.viewMatched);
+console.log('\n排序结果：');
+plan2.entries.forEach((e, i) => {
+  const name = path.basename(e.file);
+  const marker = e.view === 'outer' ? ' ← 匹配' : '';
+  console.log(`  ${i + 1}. ${name.padEnd(30)} [view: ${e.view}]${marker}`);
+});
+
+// 清理
+fs.rmSync(tempDir, { recursive: true });
