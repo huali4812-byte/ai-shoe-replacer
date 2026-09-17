@@ -124,13 +124,10 @@ var AI_Shoe_CEP = (function () {
       copy = d.duplicate('AI-Shoe-temp', true);
       rgb(copy);
       copy.crop([UnitValue(box[0],'px'),UnitValue(box[1],'px'),UnitValue(box[2],'px'),UnitValue(box[3],'px')]);
-      // Preserve transparency for normal exports. Flattening here turns an
-      // isolated smart-object shoe into a white background and can invert the
-      // later shoe mask semantics. Channel exports still use a white mask over
-      // a black canvas below.
-      if (!channelName) {
-        try { copy.trim(TrimType.TRANSPARENT, true, true, true, true); } catch(ignoreTrim) {}
-      }
+      // Preserve both transparency and the original canvas dimensions.
+      // Flattening creates a white background; trimming changes the full-canvas
+      // size and makes safe writeback fail. Channel exports still paint a
+      // white mask over a black canvas below.
       if (channelName) {
         copy.selection.deselect(); var black = new SolidColor(); black.rgb.hexValue = '000000'; copy.selection.selectAll(); copy.selection.fill(black); copy.selection.deselect();
         copy.selection.load(copy.channels.getByName(channelName)); var white = new SolidColor(); white.rgb.hexValue = 'FFFFFF'; copy.selection.fill(white); copy.selection.deselect();
@@ -436,6 +433,19 @@ var AI_Shoe_CEP = (function () {
       regionTasks[a.id]={box:box,mask:a.mask||null,layerId:a.layerId};
       protections[a.id]={documentId:d.id,layerId:a.layerId,box:box,channel:null,maskFile:a.mask||null};
       return {box:box};
+    },
+    captureRevisionMask:function(a){
+      var t=smartTask(a.id);if(!t)throw Error('内部任务已失效，请重新准备鞋位');
+      var d=t.doc,rt=regionTasks[a.id],box=rt?rt.box:t.box;if(!box)throw Error('鞋位坐标缺失');
+      app.activeDocument=d;var b,ch=null;
+      try{
+        try{b=bounds({bounds:d.selection.bounds});}catch(e){throw Error('请先在内部工作副本框选需要修改的鞋子局部');}
+        var ix0=Math.max(box[0],b[0]),iy0=Math.max(box[1],b[1]),ix1=Math.min(box[2],b[2]),iy1=Math.min(box[3],b[3]);
+        if(ix1<=ix0||iy1<=iy0)throw Error('局部选区必须与当前鞋位相交');
+        ch=d.channels.add();ch.name='AI-Shoe-revision-'+a.id+'-'+Date.now();d.selection.store(ch);d.selection.deselect();rgb(d);
+        exportCrop(d,box,a.output,ch.name);
+        return {mask:a.output,selectionBounds:b,regionBox:box,part:a.part};
+      }finally{try{if(ch)ch.remove();}catch(ignore){}app.activeDocument=t.parent;}
     },
     captureManualRegion:function(a){
       var t=smartTasks[a.id];if(!t||app.activeDocument.id!==t.doc.id)throw Error('请先打开内部工作副本并选择鞋部');
