@@ -22,6 +22,12 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     if(!revisions){const req=typeof require==='function'?require:window.cep_node.require;revisions=req(path.join(folder,'revisions.cjs')).createRevisions({api,vision,host,root:path.join(os.homedir(),'Pictures','AI-Shoe-Revisions')});}
     return revisions;
   }
+  function visualChildren(parent){
+    return [...(parent.children||[])].sort((a,b)=>{
+      const ax=(a.exportBox||a.box||[0,0])[0], bx=(b.exportBox||b.box||[0,0])[0];
+      return ax-bx;
+    });
+  }
   function renderRevision(row,parent,r,index){
     if(!r.preview||!r.visionMask||!r.input)return;
     let form=revisionForms.get(r.id);if(!form){form={open:false,batchSelected:false,reason:'同样条件再试一次',note:'',part:'whole',change:'structure',partMask:null};revisionForms.set(r.id,form);}
@@ -310,7 +316,9 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     $('tasks').replaceChildren();
     $('count').textContent=state.tasks.length+' 个鞋位任务';
     state.tasks.forEach(t=>{
-      const row=document.createElement('article');row.className='task collapsed';
+      const displayChildren=visualChildren(t);
+      const hasOpenRevision=displayChildren.some(r=>{const f=revisionForms.get(r.id);return f&&f.open;});
+      const row=document.createElement('article');row.className='task'+(hasOpenRevision?'':' collapsed');
       const abnormal=!!(t.detectionWarnings&&t.detectionWarnings.length)||!!t.generationError||!!t.qualityError||!!(t.children&&t.children.some(r=>r.generationState==='no_result'||r.previewValidation==='invalid'||r.qualityError));
       const toggle=document.createElement('button');toggle.className='task-toggle '+(abnormal?'warning':'normal');toggle.textContent='›';toggle.title=abnormal?'展开异常详情':'展开任务详情';toggle.onclick=()=>{row.classList.toggle('collapsed');toggle.textContent=row.classList.contains('collapsed')?'›':'⌄';};row.appendChild(toggle);
       const fullName=String(t.name||'未命名图层');
@@ -350,7 +358,13 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       }
       const details=document.createElement('p');details.textContent='图层 '+t.layerId+' · 鞋位 '+t.slot+' ｜区域 '+(t.region?t.region.box.join(', '):(t.children?'已确认 '+t.children.length+' 个区域':t.exportBox?t.exportBox.join(', '):'尚未检测'));row.appendChild(details);
       const assigned=document.createElement('p');assigned.textContent=t.product?'目标：'+t.product.sku+' | '+(t.dualRole?'主推 '+t.roleProducts['主推'].color+' ／次推 '+t.roleProducts['次推'].color:t.product.color+' | '+t.product.role):'目标：无唯一对应款色';row.appendChild(assigned);
-      const status=document.createElement('p');status.textContent=(t.children?t.children.map((r,i)=>(r.shoeCount>1?'鞋组 ':'鞋部 ')+(i+1)+(t.dualRole?' '+r.role:'')+'：'+r.status).join('；'):t.status)+(t.detectionWarnings&&t.detectionWarnings.length?'；另有 '+t.detectionWarnings.length+' 个检测候选未通过校验，已跳过':'');row.appendChild(status);
+      const status=document.createElement('p');status.textContent=(t.children?displayChildren.map((r,i)=>(r.shoeCount>1?'鞋组 ':'鞋部 ')+(i+1)+(t.dualRole?' '+r.role:'')+'：'+r.status).join('；'):t.status)+(t.detectionWarnings&&t.detectionWarnings.length?'；另有 '+t.detectionWarnings.length+' 个检测候选未通过校验，已跳过':'');row.appendChild(status);
+      if(displayChildren.length){
+        const chooser=document.createElement('div');chooser.className='visual-shoe-chooser';
+        const chooserLabel=document.createElement('span');chooserLabel.textContent='画面鞋位（从左到右）';chooser.appendChild(chooserLabel);
+        displayChildren.forEach((r,i)=>{const b=document.createElement('button');b.className='visual-shoe-button';b.textContent=String(i+1);b.title='打开画面中从左到右第'+(i+1)+'只鞋的不满意替换';b.onclick=()=>{let f=revisionForms.get(r.id);if(!f){f={open:true,batchSelected:false,reason:'同样条件再试一次',note:'',part:'whole',change:'structure',partMask:null};revisionForms.set(r.id,f);}else f.open=true;render();};chooser.appendChild(b);});
+        row.appendChild(chooser);
+      }
       const fullStatus=status.textContent||'';
       if(/本地检测器退出|紫色多款图内部需|回写剪贴关系或原层可见性/.test(fullStatus)){
         status.textContent=/请求超时600秒/.test(fullStatus)?'本地鞋位检测超过10分钟，尚未生图。可单独重新检测；不要重复整批生成。':/本地检测器退出/.test(fullStatus)?'本地检测进程退出，尚未生图。自动恢复情况见诊断详情。':/紫色多款图内部需/.test(fullStatus)?'未找到主推/次推款式文字：请检查智能对象内部标记。紫色表示多款，不只是两只鞋；若只有同一款鞋，请按目标角色重新标色并扫描。':'图片已生成，但Photoshop回写未通过。结果已保留，下次批量复用图片重试回写，不必重新生成。';
@@ -367,7 +381,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       }
       if(t.children){
         const batchRedo=button('批量生成已勾选的不满意版本',async()=>{
-          const items=t.children.map(r=>({r,form:revisionForms.get(r.id)})).filter(x=>x.form&&x.form.batchSelected);
+          const items=displayChildren.map(r=>({r,form:revisionForms.get(r.id)})).filter(x=>x.form&&x.form.batchSelected);
           if(!items.length)throw Error('请先勾选至少一个鞋位');
           if(items.some(x=>x.r.written))throw Error('已写回鞋位不能批量重做');
           if(items.some(x=>x.form.part!=='whole'&&(!x.form.partMask||!x.form.note.trim())))throw Error('局部批量重做需要每个鞋位读取选区并填写要求');
@@ -377,7 +391,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
           message('批量候选已准备好，请逐个对比后应用或保留。');
         },false);row.appendChild(batchRedo);
         const summary=document.createElement('p');summary.textContent=t.phase==='needs_candidate_review'?'整图待检查：跳过候选尚未确认，不等于完成':t.needsFinalize?'待收尾：下次批量仅完成回写及提示隐藏':t.acceptedWritten?'已接受区域全部写回，最终画面待验收':'';row.appendChild(summary);
-        t.children.forEach((r,i)=>{if(!r.written&&(r.previewValidation==='invalid'||r.generationState==='no_result'||r.qualityError))row.appendChild(button('重新生成区域 '+(i+1),async()=>{if(!window.confirm('仅重新生成这个失败区域；原预览将保留归档，其他结果复用。是否加入下次批量？'))return;queueRegeneration(r);t.written=false;message(r.status);},false));});
+        displayChildren.forEach((r,i)=>{if(!r.written&&(r.previewValidation==='invalid'||r.generationState==='no_result'||r.qualityError))row.appendChild(button('重新生成画面鞋位 '+(i+1),async()=>{if(!window.confirm('仅重新生成画面中从左到右第'+(i+1)+'只鞋；原预览将保留归档，其他结果复用。是否加入下次批量？'))return;queueRegeneration(r);t.written=false;message(r.status);},false));});
         if(hasUnreviewedCandidates(t)){
           const view=document.createElement('details'),label=document.createElement('summary');label.textContent='查看检测图与跳过候选';view.appendChild(label);
           if(t.detectionPreview){const img=document.createElement('img');img.src=t.detectionPreview;img.style.maxWidth='100%';view.appendChild(img);}else{const note=document.createElement('p');note.textContent='旧任务缺少候选图，请先点击本地复检后再检查。';view.appendChild(note);}
@@ -386,7 +400,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
           row.appendChild(button('本地复检候选（保留已有预览）',async()=>{await retryDetection(t);},false));
         }
       }
-      (t.children||[t]).forEach((r,i)=>renderRevision(row,t,r,i));
+      (displayChildren.length?displayChildren:[t]).forEach((r,i)=>renderRevision(row,t,r,i));
       $('tasks').appendChild(row);
     });
   }

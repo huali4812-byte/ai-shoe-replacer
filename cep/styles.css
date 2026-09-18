@@ -83,7 +83,7 @@ summary{cursor:pointer;font-size:12px;color:#c3c6ce;line-height:22px}
 .task{position:relative;padding-left:34px}
 .task-toggle{position:absolute;left:8px;top:12px;width:22px;min-height:24px;padding:0;border:0;background:transparent;color:#fff;font-size:22px;line-height:20px}
 .task-toggle.warning{color:#f0c34e}.task-toggle.normal{color:#fff}
-.task.collapsed>*:not(.task-toggle):not(strong){display:none}
+.task.collapsed>*:not(.task-toggle):not(strong):not(.visual-shoe-chooser){display:none}.visual-shoe-chooser{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:9px 0 4px}.visual-shoe-chooser>span{font-size:11px;color:#aeb6c5;margin-right:3px}.visual-shoe-button{min-width:28px;height:28px;padding:3px 8px;border-radius:50%;background:#3b527c;border-color:#6f8fc9;color:#fff;font-weight:600}
 .task.collapsed strong{border-bottom:0;padding-bottom:0}
 body[data-theme="light"] .task-toggle.normal{color:#fff}
 body[data-theme="light"]{--bg:#f3f5f8;--panel:#ffffff;--text:#20242b;--muted:#667080;--border:#d8dde6;background:var(--bg);color:var(--text)}
