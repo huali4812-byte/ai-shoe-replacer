@@ -26,8 +26,13 @@ function classify(file){
    has(['logo'])||/标志|字标|品牌|logo/.test(text)?'logo':
    has(['sole','bottom'])||/鞋底|大底|中底/.test(text)?'sole':
    has(['toe','front'])||/鞋头|包头/.test(text)?'toe':
-   has(['upper','top'])||/鞋面|鞋带|魔术贴/.test(text)?'upper':
-   has(['heel','back','pulltab'])||/后跟|鞋口|提拉环|拉环/.test(text)?'heel':
+   has(['pulltab'])||/提拉环|拉环/.test(text)?'pullTab':
+   has(['strap','velcro'])||/魔术贴|粘扣|绑带/.test(text)?'strap':
+   has(['tongue'])||/鞋舌/.test(text)?'tongue':
+   has(['inner','inside','medial'])||/内侧/.test(text)?'inner':
+   has(['outer','outside','lateral'])||/外侧/.test(text)?'outer':
+   has(['upper','top'])||/鞋面|鞋带/.test(text)?'upper':
+   has(['heel','back'])||/后跟|鞋口/.test(text)?'heel':
    'overall';
  
  return {view,detail,evidence:'filename'};
@@ -61,4 +66,17 @@ function plan(material,{view='unknown',detail='overall'}={}){
  
  return {schemaVersion:1,requestedView:view,requestedDetail:detail,viewMatched:false,warnings,entries:ordered,files:ordered.map(e=>e.file)};
 }
-module.exports={classify,plan};
+const DETAIL_ALIASES={strap:['logo','front','top','upper','single01','single02'],tongue:['logo','front','top','upper','single01','single02'],inner:['back'],outer:['side','sideright','sideleft'],pullTab:['heel','back','front','top'],heel:['heel','back'],sidewall:['side','sideright','sideleft','back','single01','single02'],toe:['front','single01','single02'],upper:['top','front','logo','single01','single02'],logo:['logo'],sole:['sole']};
+function revisionReferences(material,part){
+ const files=[...new Set([material.cutout,...(material.references||[])].filter(Boolean))];
+ const entries=files.map(sourceFile=>{const base=path.basename(sourceFile,path.extname(sourceFile)).toLowerCase();return {sourceFile,file:sourceFile,...classify(sourceFile),base};});
+ const aliases=DETAIL_ALIASES[part]||[part];
+ let selected=entries.filter(e=>aliases.some(token=>e.base.endsWith('_t_'+token)||e.base.includes('_t_'+token+'_')||e.base.endsWith('_'+token)));
+ if(part==='inner')selected=entries.filter(e=>e.view==='inner'||e.base.endsWith('_t_back'));
+ if(part==='outer')selected=entries.filter(e=>e.view==='outer'||e.base.endsWith('_t_side')||e.base.endsWith('_t_sideright'));
+ if(part==='sole')selected=entries.filter(e=>e.detail==='sole');
+ if(part==='logo')selected=entries.filter(e=>e.detail==='logo');
+ if(!selected.length)selected=entries.filter(e=>e.detail==='overall').slice(0,2);
+ return selected;
+}
+module.exports={classify,plan,revisionReferences,DETAIL_ALIASES};

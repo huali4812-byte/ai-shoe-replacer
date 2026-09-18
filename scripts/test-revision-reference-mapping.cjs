@@ -1,0 +1,13 @@
+'use strict';
+const assert=require('assert');
+const plan=require('../cep/reference-plan.cjs');
+const material={cutout:'/tmp/GB_t_single01.png',references:['/tmp/GB_t_logo.png','/tmp/GB_t_back.png','/tmp/GB_t_side.png','/tmp/GB_t_sole.png','/tmp/GB_t_heel.png','/tmp/GB_t_front.png','/tmp/GB_t_top.png','/tmp/GB_t_pair.png']};
+const names=part=>plan.revisionReferences(material,part).map(x=>x.sourceFile);
+assert(names('sole').some(x=>x.endsWith('_t_sole.png')));
+assert(names('logo').every(x=>x.endsWith('_t_logo.png')));
+assert(names('inner').some(x=>x.endsWith('_t_back.png')));
+assert(names('outer').some(x=>x.endsWith('_t_side.png')));
+assert(names('pullTab').some(x=>x.endsWith('_t_heel.png')));
+assert(names('toe').some(x=>x.endsWith('_t_front.png')));
+assert(names('upper').some(x=>x.endsWith('_t_top.png')));
+console.log('PASS revision part reference mapping: sole/logo/inner/outer/pull-tab/toe/upper');

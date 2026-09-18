@@ -15,7 +15,7 @@ function createRevisions({api,vision,host,root}) {
   }
   async function generate(p,r,{reason='同样条件再试一次',note='',local=false,repairMode=null,part=null,change='structure',partMask=null}={}){
     check(r);if(repairMode && (repairMode!=='still_life'||!local||p.dualRole))throw Error('摆拍修复仅适用于无人、无脚部的独立摆拍鞋图');if(r.revisionCandidate)throw Error('请先应用或保留当前版本，再创建下一版');
-    const localized=part==='sole'||part==='logo';
+    const localized=['sole','logo','strap','tongue','inner','outer','sidewall','pullTab','toe','upper','heel'].includes(part);
     if(localized&&(!partMask||!fs.existsSync(partMask)))throw Error('局部重生成必须先读取 Photoshop 局部选区');
     if(localized&&!String(note).trim())throw Error('请输入该部位需要修改的具体要求');
     const folder=fs.mkdtempSync(path.join((fs.mkdirSync(root,{recursive:true}),root),'version-'));
@@ -23,7 +23,7 @@ function createRevisions({api,vision,host,root}) {
     try{
       const plan=require('./reference-plan.cjs');
       const allReferences=[r.material.cutout].concat(r.material.references||[]);
-      const selectedReferences=localized?allReferences.filter(file=>plan.classify(file).detail===part):allReferences;
+      const selectedReferences=localized?plan.revisionReferences(r.material,part).map(e=>e.sourceFile||e.file):allReferences;
       if(localized&&!selectedReferences.length)throw Error('资源库缺少 '+part+' 对应参考图，已停止生成');
       const originals=[localized?r.preview:r.input,localized?partMask:r.visionMask].concat(selectedReferences);
       const copies=originals.map((f,i)=>{const dest=path.join(folder,'input-'+i+path.extname(f));fs.copyFileSync(i>=2?require('./reference-cache.cjs').snapshot(f):f,dest);return dest;});
@@ -38,8 +38,9 @@ function createRevisions({api,vision,host,root}) {
       }
       if(local){v.preview=path.join(folder,'reused'+path.extname(r.preview));fs.copyFileSync(r.preview,v.preview);}
       else{
-        const partName={sole:'鞋底',logo:'Logo'}[part];
-        const localInstruction=localized?'仅修改白色蒙版内的'+partName+'；黑色区域及白色区域外的鞋型、轮廓、鞋面、鞋带、其他Logo、人物和背景必须保持第一张图不变。'+(change==='color'?'只校正该部位颜色、材质和分色，保持原有几何结构、厚度、纹路位置及鞋型不变。':'按照对应部位参考还原结构、纹理、材质和颜色，不改变相邻部件。'):'将蒙版内 '+(r.shoeCount||1)+' 只鞋替换为 '+r.product.sku+' '+r.product.color+'（'+r.role+'）。';
+        const partNames={sole:'鞋底',logo:'Logo',strap:'魔术贴',tongue:'鞋舌',inner:'鞋内侧',outer:'鞋外侧',sidewall:'鞋侧结构',pullTab:'提拉环',toe:'鞋头',upper:'鞋面',heel:'后跟和鞋口'};
+        const partName=partNames[part]||'选定部位';
+        const localInstruction=localized?'仅修改白色蒙版内的'+partName+'；黑色区域及白色区域外的鞋型、轮廓、其他鞋体部件、人物和背景必须保持第一张图不变。'+(change==='color'?'只校正该部位颜色、材质和分色，保持原有几何结构、厚度、纹路位置及鞋型不变，禁止改变轮廓、数量、连接关系或相邻结构。':'按照对应部位参考还原结构、纹理、材质和颜色，不改变相邻部件；只处理用户选定的原因，不顺带修改其他属性。'):'将蒙版内 '+(r.shoeCount||1)+' 只鞋替换为 '+r.product.sku+' '+r.product.color+'（'+r.role+'）。';
         const prompt='第一张是当前结果局部图，第二张是同坐标黑白编辑蒙版，仅白色区域允许修改，后面只提供与本次修改对应的目标参考图。'+localInstruction+'必须保留第一张画布尺寸和1:1比例、鞋的位置、左右脚、鞋尖方向、透视、大小及遮挡。禁止把蒙版画入输出。此次重点：'+reason+'。用户要求：'+note;
         const edit={...r,input:copies[0],visionMask:copies[1],material:{cutout:copies[2],references:copies.slice(3),referenceMetadata:Object.fromEntries(selectedReferences.map((file,i)=>[copies[i+2],r.material.referenceMetadata&&r.material.referenceMetadata[file]||plan.classify(file)])),logoReferences:selectedReferences.map((file,i)=>plan.classify(file).detail==='logo'?copies[i+2]:null).filter(Boolean)}};
         v.status='generating';record(v);v.preview=await generation.run({api,task:edit,prompt,maskFirst:true,options:{taskId:r.id+'-'+v.id,aspectRatio:'1:1',validateAspect:true},record:log=>{v.generation=log;record(v);}});
@@ -51,6 +52,15 @@ function createRevisions({api,vision,host,root}) {
       if(!v.outputDiagnosis.passed)throw Error('局部输出诊断未通过；蒙版外变化仅作记录，最终由合成保护');
       v.composition=await compose(p,r,v.preview,folder,v.refinedMask||v.editMask);v.status='candidate';record(v);r.revisionCandidate=v;return v;
     }catch(e){v.status='failed';v.error=e.message;record(v);throw e;}
+  }
+  async function generateBatch(p,items){
+    if(!Array.isArray(items)||!items.length)throw Error('没有选择需要重做的鞋位');
+    if(items.some(x=>x.r.revisionCandidate))throw Error('所选鞋位已有候选版本，请先应用或保留');
+    const results=[];
+    for(const item of items){
+      results.push(await generate(p,item.r,item.options||{}));
+    }
+    return results;
   }
   function discard(r){const v=r.revisionCandidate;if(!v)return;v.status='not_selected';record(v);r.revisionCandidate=null;}
   async function apply(p,r){
@@ -72,6 +82,6 @@ function createRevisions({api,vision,host,root}) {
     try{record(v);}catch(e){v.logWarning=e.message;}
     return v;
   }
-  return {generate,apply,discard};
+  return {generate,generateBatch,apply,discard};
 }
 module.exports={createRevisions};

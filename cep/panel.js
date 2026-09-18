@@ -24,7 +24,8 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
   }
   function renderRevision(row,parent,r,index){
     if(!r.preview||!r.visionMask||!r.input)return;
-    let form=revisionForms.get(r.id);if(!form){form={open:false,reason:'同样条件再试一次',note:'',part:'whole',change:'structure',partMask:null};revisionForms.set(r.id,form);}
+    let form=revisionForms.get(r.id);if(!form){form={open:false,batchSelected:false,reason:'同样条件再试一次',note:'',part:'whole',change:'structure',partMask:null};revisionForms.set(r.id,form);}
+    const batchPick=document.createElement('label');batchPick.className='revision-pick';const pick=document.createElement('input');pick.type='checkbox';pick.checked=!!form.batchSelected;pick.disabled=state.busy;pick.onchange=()=>{form.batchSelected=pick.checked;};batchPick.appendChild(pick);batchPick.appendChild(document.createTextNode('加入批量重做'));row.appendChild(batchPick);
     const wrap=document.createElement('details');wrap.className='revision';wrap.open=form.open||!!r.revisionCandidate;wrap.ontoggle=()=>{form.open=wrap.open;};
     const label=document.createElement('summary');label.textContent='效果不满意 · '+r.role+' · '+(r.shoeCount>1?'鞋组 '+(index+1)+'（'+r.shoeCount+' 只一起）':'鞋位 '+(index+1));wrap.appendChild(label);
     const note=document.createElement('p');note.textContent='从换鞋前原图重做；当前结果保留，应用后才替换。版本选择限本次面板会话，文件会保存在本机。';wrap.appendChild(note);
@@ -42,14 +43,14 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       ['同样条件再试一次','鞋款或配色不准确','朝向、姿态不对','边缘、遮挡不自然','返回图正常，仅重新合成','无人摆拍鞋：重建完整蒙版（不生成）','鞋位或角色识别错误'].forEach(text=>{const option=document.createElement('option');option.value=text;option.textContent=text;reason.appendChild(option);});
       reason.value=form.reason;reason.disabled=state.busy;reason.onchange=()=>{form.reason=reason.value;};wrap.appendChild(reason);
       const part=document.createElement('select');part.setAttribute('aria-label','局部修改部位');
-      [['whole','整鞋重做（原功能）'],['sole','鞋底'],['logo','Logo']].forEach(([value,text])=>{const option=document.createElement('option');option.value=value;option.textContent=text;part.appendChild(option);});
+      [['whole','整鞋'],['strap','魔术贴'],['tongue','鞋舌'],['inner','鞋内侧'],['outer','鞋外侧'],['sidewall','鞋侧结构'],['pullTab','提拉环'],['logo','Logo'],['sole','鞋底'],['toe','鞋头'],['upper','鞋面'],['heel','后跟/鞋口']].forEach(([value,text])=>{const option=document.createElement('option');option.value=value;option.textContent=text;part.appendChild(option);});
       part.value=form.part;part.disabled=state.busy;part.onchange=()=>{form.part=part.value;form.partMask=null;render();};wrap.appendChild(part);
       if(form.part!=='whole'){
         const change=document.createElement('select');change.setAttribute('aria-label','局部修改目标');
         [['structure','结构、纹理和颜色'],['color','只改颜色和材质，不改鞋型结构']].forEach(([value,text])=>{const option=document.createElement('option');option.value=value;option.textContent=text;change.appendChild(option);});
         change.value=form.change;change.disabled=state.busy;change.onchange=()=>{form.change=change.value;};wrap.appendChild(change);
-        const guide=document.createElement('p');guide.textContent=form.partMask?'已读取局部选区；生成和最终合成都只允许修改该选区。':'先打开内部工作副本，用 Photoshop 选区工具圈出要修改的'+(form.part==='sole'?'鞋底':'Logo')+'，再读取选区。';wrap.appendChild(guide);
-        wrap.appendChild(button('打开内部工作副本并框选',async()=>{await host('openSmartTask',r);message('请在内部工作副本精确框选要修改的'+(form.part==='sole'?'鞋底':'Logo')+'，然后返回面板点击“读取局部选区”。');},false));
+        const guide=document.createElement('p');guide.textContent=form.partMask?'已读取局部选区；生成和最终合成都只允许修改该选区。':'先打开内部工作副本，用 Photoshop 选区工具圈出要修改的部位，再读取选区。';wrap.appendChild(guide);
+        wrap.appendChild(button('打开内部工作副本并框选',async()=>{await host('openSmartTask',r);message('请在内部工作副本精确框选要修改的'+form.part+'，然后返回面板点击“读取局部选区”。');},false));
         wrap.appendChild(button('读取局部选区',async()=>{const dir=path.join(os.homedir(),'Pictures','AI-Shoe-Revisions','selection-'+Date.now());fs.mkdirSync(dir,{recursive:true});const result=await host('captureRevisionMask',{...r,part:form.part,output:path.join(dir,'part-mask.png')});form.partMask=result.mask;message('局部选区已读取。确认提示词后可准备新版本。');},false));
       }
       const input=document.createElement('textarea');input.placeholder=form.part==='whole'?'可选：补充具体要求':'必填：说明该部位哪里不对、希望如何修改';input.setAttribute('aria-label','重做补充要求');input.value=form.note;input.disabled=state.busy;input.oninput=()=>{form.note=input.value;};wrap.appendChild(input);
@@ -59,7 +60,8 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         const local=!!repairMode||form.reason==='返回图正常，仅重新合成',localized=form.part!=='whole';
         if(localized&&!form.partMask)throw Error('请先打开内部工作副本并读取局部选区');
         if(localized&&!form.note.trim())throw Error('请输入该部位需要修改的具体要求');
-        if(!window.confirm((repairMode?'仅用于没有人物、手、腿或袜子的摆拍鞋图。将重新分割完整鞋身，复用现有AI图，不收费生成。':local?'复用当前生成图，先本地补检提拉环蒙版再重新合成，不调用生图接口。':localized?'仅重新生成已框选的'+(form.part==='sole'?'鞋底':'Logo')+'，并上传对应参考图，可能产生费用。':'为'+r.role+'区域 '+(index+1)+'（'+(r.shoeCount||1)+' 只鞋）生成一个新版本，可能产生费用。')+'当前结果不会覆盖，生成后需点击应用。是否继续？'))return;
+        const localizedLabel={sole:'鞋底',logo:'Logo',strap:'魔术贴',tongue:'鞋舌',inner:'鞋内侧',outer:'鞋外侧',sidewall:'鞋侧结构',pullTab:'提拉环',toe:'鞋头',upper:'鞋面',heel:'后跟/鞋口'}[form.part]||form.part;
+        if(!window.confirm((repairMode?'仅用于没有人物、手、腿或袜子的摆拍鞋图。将重新分割完整鞋身，复用现有AI图，不收费生成。':local?'复用当前生成图，先本地补检提拉环蒙版再重新合成，不调用生图接口。':localized?'仅重新生成已框选的'+localizedLabel+'，并上传对应参考图，可能产生费用。':'为'+r.role+'区域 '+(index+1)+'（'+(r.shoeCount||1)+' 只鞋）生成一个新版本，可能产生费用。')+'当前结果不会覆盖，生成后需点击应用。是否继续？'))return;
         message(repairMode?'正在重建摆拍鞋完整蒙版并重新合成…':local?'正在本地补检提拉环并重新合成…':localized?'正在生成局部候选版本，其他部位强制保护…':'正在生成候选版本，当前结果保留…');
         await revisionService().generate(parent,r,{reason:form.reason,note:form.note,local,repairMode,part:localized?form.part:null,change:form.change,partMask:form.partMask});message('新版本已准备好，请对比后选择应用或保留当前版本。');
       },false));
@@ -364,6 +366,16 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         row.appendChild(button('确认手动选区',async()=>{const manual=await host('captureManualRegion',t);t.protection=manual;t.exportBox=manual.box;t.visionMask=manual.mask;t.input=manual.input;t.exported=true;t.manualRegion=true;t.status='手动区域已确认，可继续批量换鞋';message(t.status);},!state.scan.working));
       }
       if(t.children){
+        const batchRedo=button('批量生成已勾选的不满意版本',async()=>{
+          const items=t.children.map(r=>({r,form:revisionForms.get(r.id)})).filter(x=>x.form&&x.form.batchSelected);
+          if(!items.length)throw Error('请先勾选至少一个鞋位');
+          if(items.some(x=>x.r.written))throw Error('已写回鞋位不能批量重做');
+          if(items.some(x=>x.form.part!=='whole'&&(!x.form.partMask||!x.form.note.trim())))throw Error('局部批量重做需要每个鞋位读取选区并填写要求');
+          if(!window.confirm('将按每只鞋各自的蒙版和部位参考逐个生成候选版本，其他鞋位不变，可能产生费用。当前版本不会覆盖。是否继续？'))return;
+          message('正在批量生成不满意候选版本…');
+          await revisionService().generateBatch(t,items.map(x=>({r:x.r,options:{reason:x.form.reason,note:x.form.note,part:x.form.part==='whole'?null:x.form.part,change:x.form.change,partMask:x.form.partMask}})));
+          message('批量候选已准备好，请逐个对比后应用或保留。');
+        },false);row.appendChild(batchRedo);
         const summary=document.createElement('p');summary.textContent=t.phase==='needs_candidate_review'?'整图待检查：跳过候选尚未确认，不等于完成':t.needsFinalize?'待收尾：下次批量仅完成回写及提示隐藏':t.acceptedWritten?'已接受区域全部写回，最终画面待验收':'';row.appendChild(summary);
         t.children.forEach((r,i)=>{if(!r.written&&(r.previewValidation==='invalid'||r.generationState==='no_result'||r.qualityError))row.appendChild(button('重新生成区域 '+(i+1),async()=>{if(!window.confirm('仅重新生成这个失败区域；原预览将保留归档，其他结果复用。是否加入下次批量？'))return;queueRegeneration(r);t.written=false;message(r.status);},false));});
         if(hasUnreviewedCandidates(t)){
@@ -500,7 +512,29 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     const failedShoeTasks=ready.filter(t=>!t.written||t.generationState==='no_result'||t.writeError||t.qualityError||(t.children&&t.children.some(r=>!r.written||r.generationState==='no_result'||r.writeError||r.qualityError))).length;
     if(documentWrites){showBatchStage('回写完成，等待另存 PSB 副本');const saved=await host('saveCopy',{documentId:state.scan.documentId});fs.writeFileSync(path.join(dir,'saved-document.json'),JSON.stringify({documentId:state.scan.documentId,document:state.scan.document,saved:saved,time:new Date().toISOString()},null,2));message('鞋位回写 '+written+' 个；产品展示本次写入 '+displayWrites+' 行、仍有 '+(pendingDisplayRows+failedShoeTasks)+' 个行/任务未完成；已写入效果待验收。'+(saved.path||'已取消保存'));} else message('本次没有成功回写；失败/待重试 '+(pendingDisplayRows+failedShoeTasks)+' 个行/任务，请查看各任务错误阶段。');
   },'正在准备批量换鞋…');
+  $('retryUnwritten').onclick=()=>act(async()=>{
+    if(!state.scan)throw Error('请先扫描 PSB');
+    const candidates=[];
+    for(const parent of state.tasks){
+      if(parent.taskType==='product_display'||parent.written)continue;
+      const regions=parent.children||[parent];
+      for(const r of regions){
+        // Missing result / explicit generation failure is safe to regenerate.
+        // A received preview with writeError is not regenerated: the next batch
+        // retries local validation/writeback and avoids another paid request.
+        if(!r.written&&r.exported===true&&!r.preview&&(
+          r.generationState==='no_result'||r.phase==='no_result'||r.status&&/未取得可用结果|网络|超时|请求失败/.test(r.status))){candidates.push(r);}
+      }
+    }
+    if(!candidates.length){message('没有可一键重新生成的未回写区域；已有生成图的区域会在下次批量中优先重试回写。');return;}
+    if(!window.confirm('将重新生成 '+candidates.length+' 个没有拿到结果的区域，可能产生费用；已有预览但未回写的区域不会重复生成。是否继续？'))return;
+    for(const r of candidates)queueRegeneration(r);
+    message('已加入 '+candidates.length+' 个未回写区域，即将批量重新生成…');
+    // Start after act() releases its busy lock; otherwise the nested click is ignored.
+    setTimeout(()=>$('batch').click(),0);
+  });
   $('themeToggle').onclick=()=>{if(state.busy)return;state.theme=state.theme==='dark'?'light':'dark';localStorage.setItem('shoe-theme',state.theme);applyTheme();message((state.theme==='dark'?'夜间':'白天')+'模式已启用；AI 并发固定为 7，Photoshop 串行回写');};
+
   $('targetSku').onchange=()=>{state.targetSku=$('targetSku').value;state.materials=[];rebuild();render();message(state.targetSku?'已选择新货号 '+state.targetSku+'，请读取素材库':'已清除新货号选择');};
   async function loadLibrary(){
     if(!state.targetSku)throw Error('请先选择新货号');
