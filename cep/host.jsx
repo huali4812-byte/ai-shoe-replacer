@@ -439,7 +439,11 @@ var AI_Shoe_CEP = (function () {
       var d=t.doc,rt=regionTasks[a.id],box=rt?rt.box:t.box;if(!box)throw Error('鞋位坐标缺失');
       app.activeDocument=d;var b,ch=null;
       try{
-        try{b=bounds({bounds:d.selection.bounds});}catch(e){throw Error('请先在内部工作副本框选需要修改的鞋子局部');}
+        try{
+          var sb=d.selection.bounds;b=[sb[0].as('px'),sb[1].as('px'),sb[2].as('px'),sb[3].as('px')];
+          for(var bi=0;bi<4;bi++)if(!isFinite(b[bi]))throw Error('selection bounds invalid');
+        }catch(e){throw Error('Photoshop当前内部工作副本没有可用像素选区；请确认选区工具已创建选区后再点“读取当前选区”。');}
+        if(b[2]<=b[0]||b[3]<=b[1])throw Error('当前选区为空，请重新框选需要修改的局部');
         var ix0=Math.max(box[0],b[0]),iy0=Math.max(box[1],b[1]),ix1=Math.min(box[2],b[2]),iy1=Math.min(box[3],b[3]);
         if(ix1<=ix0||iy1<=iy0)throw Error('局部选区必须与当前鞋位相交');
         ch=d.channels.add();ch.name='AI-Shoe-revision-'+a.id+'-'+Date.now();d.selection.store(ch);d.selection.deselect();rgb(d);

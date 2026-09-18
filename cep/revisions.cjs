@@ -16,16 +16,16 @@ function createRevisions({api,vision,host,root}) {
   async function generate(p,r,{reason='同样条件再试一次',note='',local=false,repairMode=null,part=null,change='structure',partMask=null}={}){
     check(r);if(repairMode && (repairMode!=='still_life'||!local||p.dualRole))throw Error('摆拍修复仅适用于无人、无脚部的独立摆拍鞋图');if(r.revisionCandidate)throw Error('请先应用或保留当前版本，再创建下一版');
     const localized=['sole','logo','strap','tongue','inner','outer','sidewall','pullTab','toe','upper','heel'].includes(part);
-    if(localized&&(!partMask||!fs.existsSync(partMask)))throw Error('局部重生成必须先读取 Photoshop 局部选区');
+    if(localized&&partMask&&!fs.existsSync(partMask))throw Error('已记录的 Photoshop 局部选区文件不存在，请重新读取或清除后继续');
     if(localized&&!String(note).trim())throw Error('请输入该部位需要修改的具体要求');
     const folder=fs.mkdtempSync(path.join((fs.mkdirSync(root,{recursive:true}),root),'version-'));
-    const v={id:path.basename(folder),folder,regionId:r.id,parentId:p.id,createdAt:new Date().toISOString(),status:'preparing',reason,note,local,repairMode,part,change,basePreview:r.preview,fingerprint:fingerprint(r)};record(v);
+    const v={id:path.basename(folder),folder,regionId:r.id,parentId:p.id,createdAt:new Date().toISOString(),status:'preparing',reason,note,local,repairMode,part,change,maskSource:localized&&partMask?'manual_part_selection':localized?'existing_shoe_mask':'existing_shoe_mask',basePreview:r.preview,fingerprint:fingerprint(r)};record(v);
     try{
       const plan=require('./reference-plan.cjs');
       const allReferences=[r.material.cutout].concat(r.material.references||[]);
       const selectedReferences=localized?plan.revisionReferences(r.material,part).map(e=>e.sourceFile||e.file):allReferences;
       if(localized&&!selectedReferences.length)throw Error('资源库缺少 '+part+' 对应参考图，已停止生成');
-      const originals=[localized?r.preview:r.input,localized?partMask:r.visionMask].concat(selectedReferences);
+      const originals=[localized?r.preview:r.input,localized?(partMask||r.visionMask):r.visionMask].concat(selectedReferences);
       const copies=originals.map((f,i)=>{const dest=path.join(folder,'input-'+i+path.extname(f));fs.copyFileSync(i>=2?require('./reference-cache.cjs').snapshot(f):f,dest);return dest;});
       v.inputs=copies;v.selectedReferences=selectedReferences;v.editMask=copies[1];record(v);
       if(local){
@@ -40,7 +40,8 @@ function createRevisions({api,vision,host,root}) {
       else{
         const partNames={sole:'鞋底',logo:'Logo',strap:'魔术贴',tongue:'鞋舌',inner:'鞋内侧',outer:'鞋外侧',sidewall:'鞋侧结构',pullTab:'提拉环',toe:'鞋头',upper:'鞋面',heel:'后跟和鞋口'};
         const partName=partNames[part]||'选定部位';
-        const localInstruction=localized?'仅修改白色蒙版内的'+partName+'；黑色区域及白色区域外的鞋型、轮廓、其他鞋体部件、人物和背景必须保持第一张图不变。'+(change==='color'?'只校正该部位颜色、材质和分色，保持原有几何结构、厚度、纹路位置及鞋型不变，禁止改变轮廓、数量、连接关系或相邻结构。':'按照对应部位参考还原结构、纹理、材质和颜色，不改变相邻部件；只处理用户选定的原因，不顺带修改其他属性。'):'将蒙版内 '+(r.shoeCount||1)+' 只鞋替换为 '+r.product.sku+' '+r.product.color+'（'+r.role+'）。';
+        const scopeInstruction=partMask?'白色蒙版是用户精确框选范围，任何像素变化都不得超出该范围。':'当前未提供精确局部框选，白色蒙版覆盖当前整只鞋；即使整鞋可编辑，也只能修改指定的'+partName+'，鞋上其他部位必须逐像素尽量保持第一张图。';
+        const localInstruction=localized?scopeInstruction+'仅修改白色蒙版内的'+partName+'；黑色区域及白色区域外的鞋型、轮廓、其他鞋体部件、人物和背景必须保持第一张图不变。'+(change==='color'?'只校正该部位颜色、材质和分色，保持原有几何结构、厚度、纹路位置及鞋型不变，禁止改变轮廓、数量、连接关系或相邻结构。':'按照对应部位参考还原结构、纹理、材质和颜色，不改变相邻部件；只处理用户选定的原因，不顺带修改其他属性。'):'将蒙版内 '+(r.shoeCount||1)+' 只鞋替换为 '+r.product.sku+' '+r.product.color+'（'+r.role+'）。';
         const prompt='第一张是当前结果局部图，第二张是同坐标黑白编辑蒙版，仅白色区域允许修改，后面只提供与本次修改对应的目标参考图。'+localInstruction+'必须保留第一张画布尺寸和1:1比例、鞋的位置、左右脚、鞋尖方向、透视、大小及遮挡。禁止把蒙版画入输出。此次重点：'+reason+'。用户要求：'+note;
         const edit={...r,input:copies[0],visionMask:copies[1],material:{cutout:copies[2],references:copies.slice(3),referenceMetadata:Object.fromEntries(selectedReferences.map((file,i)=>[copies[i+2],r.material.referenceMetadata&&r.material.referenceMetadata[file]||plan.classify(file)])),logoReferences:selectedReferences.map((file,i)=>plan.classify(file).detail==='logo'?copies[i+2]:null).filter(Boolean)}};
         v.status='generating';record(v);v.preview=await generation.run({api,task:edit,prompt,maskFirst:true,options:{taskId:r.id+'-'+v.id,aspectRatio:'1:1',validateAspect:true},record:log=>{v.generation=log;record(v);}});
