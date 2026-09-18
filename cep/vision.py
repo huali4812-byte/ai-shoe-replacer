@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageFilter, ImageDraw
+from scipy import ndimage
 
 
 def expanded_binary_support(mask, radius):
@@ -114,9 +115,11 @@ def merge_overlapping_regions(source, regions, folder):
         expanded.append(np.asarray(grown) > 0)
     for i in range(len(regions)):
         for j in range(i):
-            if np.any(semantic[i] & semantic[j]):
-                raise ValueError('单鞋主体蒙版重叠，无法安全逐鞋生成；请重新检测')
-            if np.any(expanded[i] & expanded[j]):
+            # Keep close or slightly overlapping shoes as independent
+            # generation units. Disable dilation for both masks so the
+            # overlap is not widened during composition; writeback remains
+            # non-blocking and preserves the detected regions.
+            if np.any(semantic[i] & semantic[j]) or np.any(expanded[i] & expanded[j]):
                 regions[i]['noMaskExpansion'] = True
                 regions[j]['noMaskExpansion'] = True
     return regions
@@ -291,12 +294,28 @@ def composite(request):
     outside_mask = alpha == 0
     delta = np.abs(np.array(original, dtype=np.float32)-np.array(generated, dtype=np.float32)).mean(axis=2)
     changed_fraction = float(np.mean(delta[outside_mask] > 40)) if np.any(outside_mask) else 0.0
-    # The returned image may alter pixels outside the shoe mask. Those pixels
-    # are never written: composite() always takes them from the original.
-    # Do not reject an otherwise valid shoe merely because the model changed
-    # the crop background; retain the metric for diagnostics instead.
+    # The returned image may contain colored streaks on a white generation
+    # background. Keep the original mask as the ownership limit, but when the
+    # generated border is white, remove disconnected non-background artifacts
+    # from the patch alpha. This is cleanup only; it never rejects writeback.
+    patch_mask = np.array(expanded_mask) > 0
+    try:
+        rgb = np.asarray(generated)
+        border = np.concatenate([rgb[0], rgb[-1], rgb[:, 0], rgb[:, -1]])
+        if float(np.mean(np.min(border, axis=1) >= 245)) >= .9:
+            foreground = np.min(rgb, axis=2) < 238
+            labels, count = ndimage.label(foreground)
+            if count:
+                sizes = np.bincount(labels.ravel()); sizes[0] = 0
+                main = labels == int(np.argmax(sizes))
+                # Recover antialiased shoe edges, but not isolated line noise.
+                main = ndimage.binary_dilation(main, iterations=2)
+                patch_mask &= main
+    except Exception:
+        pass
+    patch_alpha = Image.fromarray((patch_mask.astype('uint8') * 255), mode='L')
     patch = generated.convert('RGBA')
-    patch.putalpha(expanded_mask)
+    patch.putalpha(patch_alpha)
     patch.save(request['output'])
     original = source.crop(box)
     combined = Image.composite(generated, original, expanded_mask)
@@ -328,8 +347,13 @@ def role_ownership(size, regions):
         occupied = np.array(full) > 0
         for other, previous in owners.items():
             if other != role and np.any(occupied & previous):
-                count = int(np.count_nonzero(occupied & previous))
-                raise ValueError(f'跨角色原始蒙版冲突：{count} 像素归属不明确，禁止整图回写')
+                # SAM can assign a narrow shared boundary to both close shoes.
+                # Keep both role-specific generations and continue writeback;
+                # disabling dilation prevents the shared area from growing.
+                region['noMaskExpansion'] = True
+                for earlier in regions:
+                    if earlier.get('role') == other:
+                        earlier['noMaskExpansion'] = True
         expanded_full = Image.new('L', size, 0)
         expanded_full.paste(mask.filter(ImageFilter.MaxFilter(9)), tuple(box[:2]))
         expanded = np.array(expanded_full) > 0

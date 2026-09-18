@@ -24,7 +24,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
   }
   function renderRevision(row,parent,r,index){
     if(!r.preview||!r.visionMask||!r.input)return;
-    let form=revisionForms.get(r.id);if(!form){form={open:false,reason:'同样条件再试一次',note:''};revisionForms.set(r.id,form);}
+    let form=revisionForms.get(r.id);if(!form){form={open:false,reason:'同样条件再试一次',note:'',part:'whole',change:'structure',partMask:null};revisionForms.set(r.id,form);}
     const wrap=document.createElement('details');wrap.className='revision';wrap.open=form.open||!!r.revisionCandidate;wrap.ontoggle=()=>{form.open=wrap.open;};
     const label=document.createElement('summary');label.textContent='效果不满意 · '+r.role+' · '+(r.shoeCount>1?'鞋组 '+(index+1)+'（'+r.shoeCount+' 只一起）':'鞋位 '+(index+1));wrap.appendChild(label);
     const note=document.createElement('p');note.textContent='从换鞋前原图重做；当前结果保留，应用后才替换。版本选择限本次面板会话，文件会保存在本机。';wrap.appendChild(note);
@@ -41,14 +41,27 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       const reason=document.createElement('select');reason.setAttribute('aria-label','重做原因');
       ['同样条件再试一次','鞋款或配色不准确','朝向、姿态不对','边缘、遮挡不自然','返回图正常，仅重新合成','无人摆拍鞋：重建完整蒙版（不生成）','鞋位或角色识别错误'].forEach(text=>{const option=document.createElement('option');option.value=text;option.textContent=text;reason.appendChild(option);});
       reason.value=form.reason;reason.disabled=state.busy;reason.onchange=()=>{form.reason=reason.value;};wrap.appendChild(reason);
-      const input=document.createElement('textarea');input.placeholder='可选：补充具体要求';input.setAttribute('aria-label','重做补充要求');input.value=form.note;input.disabled=state.busy;input.oninput=()=>{form.note=input.value;};wrap.appendChild(input);
+      const part=document.createElement('select');part.setAttribute('aria-label','局部修改部位');
+      [['whole','整鞋重做（原功能）'],['sole','鞋底'],['logo','Logo']].forEach(([value,text])=>{const option=document.createElement('option');option.value=value;option.textContent=text;part.appendChild(option);});
+      part.value=form.part;part.disabled=state.busy;part.onchange=()=>{form.part=part.value;form.partMask=null;render();};wrap.appendChild(part);
+      if(form.part!=='whole'){
+        const change=document.createElement('select');change.setAttribute('aria-label','局部修改目标');
+        [['structure','结构、纹理和颜色'],['color','只改颜色和材质，不改鞋型结构']].forEach(([value,text])=>{const option=document.createElement('option');option.value=value;option.textContent=text;change.appendChild(option);});
+        change.value=form.change;change.disabled=state.busy;change.onchange=()=>{form.change=change.value;};wrap.appendChild(change);
+        const guide=document.createElement('p');guide.textContent=form.partMask?'已读取局部选区；生成和最终合成都只允许修改该选区。':'先打开内部工作副本，用 Photoshop 选区工具圈出要修改的'+(form.part==='sole'?'鞋底':'Logo')+'，再读取选区。';wrap.appendChild(guide);
+        wrap.appendChild(button('打开内部工作副本并框选',async()=>{await host('openSmartTask',r);message('请在内部工作副本精确框选要修改的'+(form.part==='sole'?'鞋底':'Logo')+'，然后返回面板点击“读取局部选区”。');},false));
+        wrap.appendChild(button('读取局部选区',async()=>{const dir=path.join(os.homedir(),'Pictures','AI-Shoe-Revisions','selection-'+Date.now());fs.mkdirSync(dir,{recursive:true});const result=await host('captureRevisionMask',{...r,part:form.part,output:path.join(dir,'part-mask.png')});form.partMask=result.mask;message('局部选区已读取。确认提示词后可准备新版本。');},false));
+      }
+      const input=document.createElement('textarea');input.placeholder=form.part==='whole'?'可选：补充具体要求':'必填：说明该部位哪里不对、希望如何修改';input.setAttribute('aria-label','重做补充要求');input.value=form.note;input.disabled=state.busy;input.oninput=()=>{form.note=input.value;};wrap.appendChild(input);
       wrap.appendChild(button('准备新版本…',async()=>{
         if(form.reason==='鞋位或角色识别错误'){message('请先检查鞋位与主次推标记，可使用本地复检入口。当前结果保留；不自动改角色或调用生成。');return;}
         const repairMode=form.reason==='无人摆拍鞋：重建完整蒙版（不生成）'?'still_life':null;
-        const local=!!repairMode||form.reason==='返回图正常，仅重新合成';
-        if(!window.confirm((repairMode?'仅用于没有人物、手、腿或袜子的摆拍鞋图。将重新分割完整鞋身，复用现有AI图，不收费生成。':local?'复用当前生成图，先本地补检提拉环蒙版再重新合成，不调用生图接口。':'为'+r.role+'区域 '+(index+1)+'（'+(r.shoeCount||1)+' 只鞋）生成一个新版本，可能产生费用。')+'当前结果不会覆盖，生成后需点击应用。是否继续？'))return;
-        message(repairMode?'正在重建摆拍鞋完整蒙版并重新合成…':local?'正在本地补检提拉环并重新合成…':'正在生成候选版本，当前结果保留…');
-        await revisionService().generate(parent,r,{reason:form.reason,note:form.note,local,repairMode});message('新版本已准备好，请对比后选择应用或保留当前版本。');
+        const local=!!repairMode||form.reason==='返回图正常，仅重新合成',localized=form.part!=='whole';
+        if(localized&&!form.partMask)throw Error('请先打开内部工作副本并读取局部选区');
+        if(localized&&!form.note.trim())throw Error('请输入该部位需要修改的具体要求');
+        if(!window.confirm((repairMode?'仅用于没有人物、手、腿或袜子的摆拍鞋图。将重新分割完整鞋身，复用现有AI图，不收费生成。':local?'复用当前生成图，先本地补检提拉环蒙版再重新合成，不调用生图接口。':localized?'仅重新生成已框选的'+(form.part==='sole'?'鞋底':'Logo')+'，并上传对应参考图，可能产生费用。':'为'+r.role+'区域 '+(index+1)+'（'+(r.shoeCount||1)+' 只鞋）生成一个新版本，可能产生费用。')+'当前结果不会覆盖，生成后需点击应用。是否继续？'))return;
+        message(repairMode?'正在重建摆拍鞋完整蒙版并重新合成…':local?'正在本地补检提拉环并重新合成…':localized?'正在生成局部候选版本，其他部位强制保护…':'正在生成候选版本，当前结果保留…');
+        await revisionService().generate(parent,r,{reason:form.reason,note:form.note,local,repairMode,part:localized?form.part:null,change:form.change,partMask:form.partMask});message('新版本已准备好，请对比后选择应用或保留当前版本。');
       },false));
     }
     row.appendChild(wrap);

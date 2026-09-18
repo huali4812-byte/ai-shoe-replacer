@@ -13,14 +13,21 @@ function createRevisions({api,vision,host,root}) {
     if(!out.output||out.rejected&&out.rejected.length||!out.regions||chosen.some(x=>!out.regions.some(y=>y.id===x.id)))throw Error('合成校验未完整通过，保留当前版本');
     return out;
   }
-  async function generate(p,r,{reason='同样条件再试一次',note='',local=false,repairMode=null}={}){
+  async function generate(p,r,{reason='同样条件再试一次',note='',local=false,repairMode=null,part=null,change='structure',partMask=null}={}){
     check(r);if(repairMode && (repairMode!=='still_life'||!local||p.dualRole))throw Error('摆拍修复仅适用于无人、无脚部的独立摆拍鞋图');if(r.revisionCandidate)throw Error('请先应用或保留当前版本，再创建下一版');
+    const localized=part==='sole'||part==='logo';
+    if(localized&&(!partMask||!fs.existsSync(partMask)))throw Error('局部重生成必须先读取 Photoshop 局部选区');
+    if(localized&&!String(note).trim())throw Error('请输入该部位需要修改的具体要求');
     const folder=fs.mkdtempSync(path.join((fs.mkdirSync(root,{recursive:true}),root),'version-'));
-    const v={id:path.basename(folder),folder,regionId:r.id,parentId:p.id,createdAt:new Date().toISOString(),status:'preparing',reason,note,local,repairMode,basePreview:r.preview,fingerprint:fingerprint(r)};record(v);
+    const v={id:path.basename(folder),folder,regionId:r.id,parentId:p.id,createdAt:new Date().toISOString(),status:'preparing',reason,note,local,repairMode,part,change,basePreview:r.preview,fingerprint:fingerprint(r)};record(v);
     try{
-      const originals=[r.input,r.visionMask,r.material.cutout].concat(r.material.references);
+      const plan=require('./reference-plan.cjs');
+      const allReferences=[r.material.cutout].concat(r.material.references||[]);
+      const selectedReferences=localized?allReferences.filter(file=>plan.classify(file).detail===part):allReferences;
+      if(localized&&!selectedReferences.length)throw Error('资源库缺少 '+part+' 对应参考图，已停止生成');
+      const originals=[localized?r.preview:r.input,localized?partMask:r.visionMask].concat(selectedReferences);
       const copies=originals.map((f,i)=>{const dest=path.join(folder,'input-'+i+path.extname(f));fs.copyFileSync(i>=2?require('./reference-cache.cjs').snapshot(f):f,dest);return dest;});
-      v.inputs=copies;record(v);
+      v.inputs=copies;v.selectedReferences=selectedReferences;v.editMask=copies[1];record(v);
       if(local){
         const detected=(r.visionRegions||[]).find(x=>JSON.stringify(x.box)===JSON.stringify(r.exportBox));
         const shoeBoxes=detected&&detected.dinoBoxes?detected.dinoBoxes.map(b=>[b[0]-r.exportBox[0],b[1]-r.exportBox[1],b[2]-r.exportBox[0],b[3]-r.exportBox[1]]):undefined;
@@ -31,8 +38,10 @@ function createRevisions({api,vision,host,root}) {
       }
       if(local){v.preview=path.join(folder,'reused'+path.extname(r.preview));fs.copyFileSync(r.preview,v.preview);}
       else{
-        const prompt='第一张是换鞋前的原始局部图，第二张是同坐标黑白蒙版，仅白色鞋位允许修改，后面是目标鞋参考图。将蒙版内 '+(r.shoeCount||1)+' 只鞋替换为 '+r.product.sku+' '+r.product.color+'（'+r.role+'）。必须保留原图画布尺寸和1:1比例、逐只鞋的位置、左右脚、鞋尖方向、透视、大小及前后遮挡；严格遵循参考鞋款、配色、Logo和纹理。鞋面、鞋头、鞋侧和后跟的品牌 Logo/字标必须按对应角度参考图还原，保持正确拼写、方向、位置、大小、浮雕或凹陷质感与透视；禁止乱码、镜像、重复、移位或生成不存在的字样，禁止把后跟Logo放到鞋侧或把鞋侧Logo放到鞋头。鞋舌提拉环和后跟提拉环（pull tab）必须先擦除原提拉环，不能保留与目标款不符的旧颜色或纹理，目标拉环本身为红色时红色合法，再按目标鞋素材重绘真实的数量、位置、连接关系、尺寸、朝向、颜色、边缘包缝和织带纹理；目标鞋无提拉环时禁止新增，有提拉环时禁止漏掉、复制或移位，禁止把提拉环误当作鞋带、鞋舌或另一只鞋。其他人物、鞋、腿、袜子、文字和背景保持不变，禁止把蒙版画入输出。此次重点：'+reason+'。补充要求：'+note;
-        const edit={...r,input:copies[0],visionMask:copies[1],material:{cutout:copies[2],references:copies.slice(3),referenceMetadata:Object.fromEntries(originals.slice(2).map((file,i)=>[copies[i+2],r.material.referenceMetadata&&r.material.referenceMetadata[file]||require('./reference-plan.cjs').classify(file)])),logoReferences:originals.map((file,i)=>i>=2&&(require('./reference-plan.cjs').classify(file).detail==='logo'||(r.material.logoReferences||[]).includes(file))?copies[i]:null).filter(Boolean)}};
+        const partName={sole:'鞋底',logo:'Logo'}[part];
+        const localInstruction=localized?'仅修改白色蒙版内的'+partName+'；黑色区域及白色区域外的鞋型、轮廓、鞋面、鞋带、其他Logo、人物和背景必须保持第一张图不变。'+(change==='color'?'只校正该部位颜色、材质和分色，保持原有几何结构、厚度、纹路位置及鞋型不变。':'按照对应部位参考还原结构、纹理、材质和颜色，不改变相邻部件。'):'将蒙版内 '+(r.shoeCount||1)+' 只鞋替换为 '+r.product.sku+' '+r.product.color+'（'+r.role+'）。';
+        const prompt='第一张是当前结果局部图，第二张是同坐标黑白编辑蒙版，仅白色区域允许修改，后面只提供与本次修改对应的目标参考图。'+localInstruction+'必须保留第一张画布尺寸和1:1比例、鞋的位置、左右脚、鞋尖方向、透视、大小及遮挡。禁止把蒙版画入输出。此次重点：'+reason+'。用户要求：'+note;
+        const edit={...r,input:copies[0],visionMask:copies[1],material:{cutout:copies[2],references:copies.slice(3),referenceMetadata:Object.fromEntries(selectedReferences.map((file,i)=>[copies[i+2],r.material.referenceMetadata&&r.material.referenceMetadata[file]||plan.classify(file)])),logoReferences:selectedReferences.map((file,i)=>plan.classify(file).detail==='logo'?copies[i+2]:null).filter(Boolean)}};
         v.status='generating';record(v);v.preview=await generation.run({api,task:edit,prompt,maskFirst:true,options:{taskId:r.id+'-'+v.id,aspectRatio:'1:1',validateAspect:true},record:log=>{v.generation=log;record(v);}});
 
       }
@@ -40,7 +49,7 @@ function createRevisions({api,vision,host,root}) {
       v.outputDiagnosis=await vision.request({action:'diagnose_result',stage:'local',source:copies[0],generated:v.preview,mask:v.refinedMask||copies[1]});
       record(v);
       if(!v.outputDiagnosis.passed)throw Error('局部输出诊断未通过；蒙版外变化仅作记录，最终由合成保护');
-      v.composition=await compose(p,r,v.preview,folder,v.refinedMask);v.status='candidate';record(v);r.revisionCandidate=v;return v;
+      v.composition=await compose(p,r,v.preview,folder,v.refinedMask||v.editMask);v.status='candidate';record(v);r.revisionCandidate=v;return v;
     }catch(e){v.status='failed';v.error=e.message;record(v);throw e;}
   }
   function discard(r){const v=r.revisionCandidate;if(!v)return;v.status='not_selected';record(v);r.revisionCandidate=null;}
@@ -48,7 +57,7 @@ function createRevisions({api,vision,host,root}) {
     const v=r.revisionCandidate;if(!v||v.status!=='candidate')throw Error('没有可应用的新版本');
     if(r.preview!==v.basePreview||fingerprint(r)!==v.fingerprint)throw Error('鞋位、素材或当前版本已变化，不能应用旧候选');
     const outputDir=fs.mkdtempSync(path.join(v.folder,'apply-'));
-    const composition=await compose(p,r,v.preview,outputDir,v.refinedMask);
+    const composition=await compose(p,r,v.preview,outputDir,v.refinedMask||v.editMask);
     const all=regions(p),hideRoleMarkers=!!p.dualRole&&all.every(x=>x===r||x.written)&&!(p.detectionWarnings&&p.detectionWarnings.length&&p.candidateReview!=='dismissed');
     v.semanticReview='not_performed';
     v.status='applying';record(v);

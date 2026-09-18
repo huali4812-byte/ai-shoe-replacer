@@ -5,6 +5,14 @@ import math
 def assign(accepted, main_pair):
     if main_pair not in (0, 1):
         raise ValueError('随机主次推状态缺失，请重新准备任务')
+    if len(accepted) == 2:
+        # Two shoes detected: assign one as main, one as secondary based on random flag
+        shoes = sorted(accepted, key=lambda x: (x['bounds'][0], x['bounds'][1]))  # sort by position
+        roles = ['主推', '次推'] if main_pair == 0 else ['次推', '主推']
+        for i, shoe in enumerate(shoes):
+            shoe['role'] = roles[i]
+            shoe['roleGroupBox'] = shoe['bounds'][:]
+        return {'method':'two_shoes_random_roles','personRecognition':False,'mainPair':main_pair,'shoeCount':2}
     if len(accepted) != 4:
         raise ValueError('无文字紫色图需明确检测到两双共4只鞋，当前%d只；不能猜测配对' % len(accepted))
     shoes = sorted(accepted, key=lambda x: tuple(x['bounds']))

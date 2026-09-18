@@ -1,31 +1,40 @@
 'use strict';
 const references=require('./reference-plan.cjs');
 const referenceGuide=require('./reference-guide.cjs');
-const INLINE_INSTRUCTIONS='\n【换鞋前的逐鞋核对】先把原图中的每一只鞋分别当作独立对象核对：记录其位置、大小、鞋头/鞋跟方向、透视、倾斜、遮挡和实际可见面。不得用画面左/右推断左右脚，也不得把一只鞋的结构套到另一只鞋；一只鞋若同时露出内侧、外侧、鞋面或鞋底，必须分别保留这些可见面。\n【目标款式与可见面】原图只决定姿态、位置、透视、遮挡和背景；目标参考只决定目标鞋的款式、颜色、材料和结构。把每张参考图只用于它实际展示的部位和角度，不因参考图更清楚就把鞋旋转成参考角度，不把内外侧互换。无法确认的侧别不要臆测，优先遵循原图当前可见轮廓和目标参考共同支持的结构。\n【必须逐项保留的细节】逐只核对鞋面分区、拼接边界、车线、鞋头形状、侧墙/中底的分层与凸起、鞋口、鞋带、魔术贴、拉环、Logo/字标和鞋底。目标参考中可见的魔术贴、Logo、字标、浮雕/凹陷、凸起结构、拉环数量与连接位置都应保留；目标对应面没有的装饰禁止跨侧新增。Logo必须按参考的字形、方向、位置、大小、数量和材质呈现，禁止乱码、镜像、重复、漂移或把Logo复制到另一侧。\n【颜色与鞋底】所有颜色、材质和明暗关系以目标参考为准，不沿用原鞋旧色，不让原红/蓝等颜色渗入拉环、鞋面、侧墙或中底；但不得擅自把目标参考本身存在的颜色删掉。鞋底必须按目标参考的可见结构重现：区分外底/中底/侧墙，若目标为块状橡胶分区、颗粒面或分叉结构，必须保留其分区形状与沟槽、凸起和边齿，不得替换成波浪纹或通用人字纹；若目标本身是其他纹路，则忠实遵循目标，不把块状纹路强加给所有鞋款。\n【生成前自检】生成前再次逐只检查：当前可见面是否匹配、内外侧是否混用、每只鞋的姿态是否保持、目标颜色是否完整、Logo/魔术贴/拉环是否在正确位置、鞋底分区和纹路是否来自目标参考。保持每只鞋原位置、尺度、朝向、透视、遮挡及背景，不镜像、不旋转、不改变构图，不生成对比拼图。最终只返回生成图片，不返回JSON、说明文字或分析过程。';
+const INLINE_INSTRUCTIONS='\n【唯一款式依据】目标鞋主参考是唯一完整款式依据；如另有鞋底细节图，它只用于鞋底纹理、分区和颜色，不代表需要露出鞋底。参考图不是要复制到画面的产品照片。不要生成参考图的白底、黑底、阴影、第二只鞋或展示构图。\n【严格一对一替换】编辑蒙版内原来有几只鞋，输出仍只能有相同数量。每只新鞋必须占据对应旧鞋的位置、大小、朝向、左右脚、透视和遮挡；不得新增、复制或悬空任何鞋体、鞋带、魔术贴、Logo、提拉环、鞋底或零件。\n【场景保护】只替换蒙版内鞋体。人物、腿、袜子、裤子、地面、背景、文字、光影和蒙版外内容保持第一张图不变。不要输出产品图、拼图、对比图或说明文字，只返回与第一张相同尺寸的最终图。';
+const REPLACEMENT_OVERRIDE='\n【最终换款硬规则，本段优先于前文】原场景鞋只提供位置、大小、朝向、左右脚、透视、脚部遮挡和落地关系；原鞋的款式结构一律不得保留。必须先清除原鞋的魔术贴、搭扣、鞋带系统、Logo、侧墙图案、开孔、凸块、拼接线和装饰，再完全按目标主参考重建。每只目标鞋只能有目标参考实际显示的一套魔术贴：参考为一条就只能生成一条，禁止把原鞋魔术贴留在下面或旁边，禁止叠加、分叉、上下双层或生成第二条；参考没有魔术贴则不得生成。鞋侧仅采用目标参考可见的轮廓、拼接和装饰，绝不能残留原鞋Logo、字母、圆形标、弧形凸纹、孔洞、色块或原款侧墙特征。看不清的目标细节应简化为干净连续的目标鞋材质，不得借用原鞋特征补全。\n【魔术贴与鞋侧层级】每只鞋只有目标参考中横跨脚背的那一条宽魔术贴闭合带；鞋侧纵向或斜向的窄皮条、织带、包边和骨架仅是鞋侧固定装饰，必须停留在鞋侧，不能横跨脚背，不能延伸成第二条魔术贴，不能与主魔术贴上下叠放。主魔术贴的起点、终点、宽度、圆角、缝线和连接位置严格照目标主参考；可见品牌文字或Logo应完整位于这一条主魔术贴上，不得截断、拆分或复制到鞋侧。\n【鞋底后跟不得变形】严格保持目标主参考的鞋头包边、中底厚度、外底高度和后跟轮廓比例；禁止把后跟放大为灰色硬壳、厚平台、楔形块或外凸配重，禁止因原鞋结构而增厚鞋底。场景透视只改变观看角度，不改变目标鞋真实结构比例。';
 async function run({api,task,prompt,maskFirst=false,options={},record=()=>{}}){
  const log={schemaVersion:2,analysis:'inline_prompt_only',semanticReview:'not_performed',attempts:[],status:'preparing'};
  task.autoGeneration=log;record(log);
  try{
-  const plan=references.plan(task.material,{view:'unknown'});
-  task.referencePlan=plan;log.references=plan;
+  const fullPlan=references.plan(task.material,{view:'unknown'});
+  const primaryEntry=fullPlan.entries.find(e=>e.sourceFile===task.material.cutout)||fullPlan.entries.find(e=>e.detail==='overall')||fullPlan.entries[0];
+  if(!primaryEntry)throw Error('缺少目标鞋主参考图');
+  const logoEntry=fullPlan.entries.find(e=>e!==primaryEntry&&e.detail==='logo');
+  const soleEntry=fullPlan.entries.find(e=>e!==primaryEntry&&e!==logoEntry&&e.detail==='sole'&&e.view==='sole');
+  const selectedEntries=[primaryEntry].concat(logoEntry?[logoEntry]:[]).concat(soleEntry?[soleEntry]:[]);
+  const plan={...fullPlan,entries:selectedEntries,files:selectedEntries.map(e=>e.file),warnings:(fullPlan.warnings||[]).concat('稳定生成模式：一张主参考，最多附加一张Logo局部和一张鞋底细节')};
+  task.referencePlan=plan;log.fullReferenceCount=fullPlan.files.length;log.referenceStrategy='primary_plus_optional_logo_and_sole';log.references=plan;
   const isolatedShoe=task.shoeCount===1&&!!task.visionMask;
   if(isolatedShoe&&!maskFirst){maskFirst=true;prompt+='\n【实际输入顺序修正，以此为准】图1原场景，图2黑白编辑蒙版，图3起才是目标参考。仅白色区域的一只鞋允许修改；裁切中其他鞋只作位置背景，不参与本次换鞋。';}
   log.isolatedShoe=isolatedShoe;
-  if(isolatedShoe)prompt+='\n【本只鞋侧面结构必须成套对应】先独立辨认蒙版内这一只鞋的可见面。魔术贴固定端/回折端/贴合端、侧片形状、缝线、凸起和侧面Logo必须共同取自目标同一对应面；不能内侧连接端配外侧凸起，不能为了与邻鞋一致统一成同一种侧面。鞋底参考仅用于可见底面。不依据邻鞋结构替本鞋选侧，不新增另一面的魔术贴端。';
+  if(isolatedShoe)prompt+='\n【当前只处理一只鞋】黑白蒙版中的白色区域只对应这一只原鞋。不得把参考图本身作为第二只鞋放进场景，不得在鞋口、裤脚或背景附近增加任何独立零件。';
   if(maskFirst&&!task.visionMask)throw Error('缺少编辑蒙版');
   const refs=(maskFirst?[task.visionMask]:[]).concat(plan.files);
   const logoFiles=new Set([...(task.material.logoReferences||[]),...plan.entries.filter(e=>e.detail==='logo').map(e=>e.file)]);
   const logoReferenceIndices=refs.map((file,i)=>logoFiles.has(file)&&file!==task.visionMask?i:-1).filter(i=>i>=0);
   log.logoReferenceIndices=logoReferenceIndices;
-  const soleFiles=new Set(plan.entries.filter(e=>e.view==='sole'&&e.detail==='sole').map(e=>e.file));
-  const soleReferenceIndices=refs.map((file,i)=>soleFiles.has(file)&&file!==task.visionMask?i:-1).filter(i=>i>=0);
+  log.logoStatus=logoReferenceIndices.length?'dedicated_reference_bound':'no_dedicated_reference';
+  const logoGuide=logoReferenceIndices.length?'\n【Logo与魔术贴颜色专用参考图号】'+logoReferenceIndices.map(i=>'图'+(i+1)).join('、')+'只用于目标品牌Logo及其所在主魔术贴的准确外形、比例、文字、颜色、材质和位置。该图对魔术贴表面色、包边色、缝线色、字标色及彼此明暗关系的证据优先于场景旧鞋和款色文字；场景光照只改变整体受光明暗，不能改换这些部件的色相或把对比抹平。每只鞋只生成这一套Logo和这一条主魔术贴；完整照抄其圆角轮廓、宽度、连接端和可见文字，彻底删除原鞋魔术贴轮廓。不得把Logo局部图当成第二只鞋或额外贴片。':'';
+  const soleEntries=plan.entries.filter(e=>e.view==='sole'&&e.detail==='sole');
+  const soleReferenceIndices=soleEntries.map(e=>refs.indexOf(e.file)).filter(i=>i>=0);
   log.soleReferenceIndices=soleReferenceIndices;
   log.soleStatus=soleReferenceIndices.length?'dedicated_reference_bound':'no_dedicated_reference';
-  const soleGuide=soleReferenceIndices.length?'\n【鞋底参考图号】'+soleReferenceIndices.map(i=>'图'+(i+2)).join('、')+'为本次目标鞋底专用参考。只为原场景实际可见的外底提供分区、连接结构、颗粒/沟槽及配色依据，不用于鞋面或中底侧墙，不改变姿态露出原本不可见的底面。':'';
+  const soleGuide=soleReferenceIndices.length?'\n【鞋底参考图号】'+soleReferenceIndices.map(i=>'图'+(i+1)).join('、')+'为本次目标鞋底专用参考。必须严格按该图的外底纹路、分区形状、橡胶块边界、沟槽深度、颗粒排布和材质层次还原，不得替换成波浪纹、人字纹或其他通用纹路。鞋底颜色、前后掌分区、侧墙接缝必须与该参考一致。只用于原场景实际可见的外底，不改变姿态露出原本不可见的底面，不用于鞋面或中底侧墙。':'';
   const guide=referenceGuide.build(plan.files,{maskFirst,entries:plan.entries});log.referenceGuide=guide;
   const row={attempt:1,strategy:'full',status:'generating'};log.attempts.push(row);record(log);
-  row.output=await api.generate(task.input,refs,prompt+INLINE_INSTRUCTIONS+guide.text+soleGuide,{...options,logoReferenceIndices,soleReferenceIndices,maxAttempts:1});
+  row.output=await api.generate(task.input,refs,prompt+INLINE_INSTRUCTIONS+guide.text+logoGuide+soleGuide+REPLACEMENT_OVERRIDE,{...options,logoReferenceIndices,soleReferenceIndices,maxAttempts:1});
   row.status='received';log.status='received';record(log);return row.output;
  }catch(e){log.status='failed';log.error=e.message;record(log);throw e;}
 }
-module.exports={run,INLINE_INSTRUCTIONS};
+module.exports={run,INLINE_INSTRUCTIONS,REPLACEMENT_OVERRIDE};
