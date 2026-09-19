@@ -212,26 +212,36 @@ def marker_role(box, markers):
 
 
 def assign_shoe_groups(accepted, markers):
-    """Pair nearby shoes at similar image scale before reading role labels.
+    """Bind two physical shoe groups to the two labels, globally and once.
 
-    This is geometric grouping, not person recognition. Ambiguous groups stop
-    the task instead of assigning a foreground shoe to the background role.
+    Label layers are hidden only after their bounds are recorded.  Grouping
+    first prevents detector order, left/right order, or one unusually large
+    foreground shoe from swapping 主推 and 次推.
     """
-    for item in accepted:
-        item['role'] = marker_role(item['bounds'], markers)
-        item['roleGroupBox'] = item['bounds'][:]
-    # Overlapping views of the same person's shoes inherit the role of the
-    # larger, clearer shoe. This keeps a near shoe from stealing the other
-    # person's label merely because its rectangle is closer to that label.
-    for item in sorted(accepted, key=lambda x: -max(x['bounds'][2]-x['bounds'][0], x['bounds'][3]-x['bounds'][1])):
-        a=item['bounds']; aa=max(1,(a[2]-a[0])*(a[3]-a[1]))
-        for other in accepted:
-            if other is item: continue
-            b=other['bounds']; inter=max(0,min(a[2],b[2])-max(a[0],b[0]))*max(0,min(a[3],b[3])-max(a[1],b[1]))
-            ob=max(1,(b[2]-b[0])*(b[3]-b[1]))
-            if inter/ob > .25: other['role']=item['role']; other['roleGroupBox']=item['bounds'][:]
-    if {item['role'] for item in accepted} != {'主推', '次推'}:
-        raise ValueError('未检测到主推和次推两方鞋位，紫色图暂不生成')
+    role_markers={m['role']:m for m in markers}
+    if set(role_markers) != {'主推','次推'}:
+        raise ValueError('紫色图缺少主推或次推文字标注')
+    groups=_pair_bucket(accepted)
+    if len(groups) != 2 or any(len(g) > 2 for g in groups):
+        raise ValueError('无法将鞋位稳定分成主推和次推两组，请将文字移近对应一双鞋后重试')
+    def group_box(group):
+        boxes=[x['bounds'] for x in group]
+        return [min(b[0] for b in boxes),min(b[1] for b in boxes),max(b[2] for b in boxes),max(b[3] for b in boxes)]
+    def distance(box, marker):
+        cx,cy=(box[0]+box[2])/2,(box[1]+box[3])/2
+        x0,y0,x1,y1=marker['bounds']
+        return math.hypot(max(x0-cx,0,cx-x1),2*max(y0-cy,0,cy-y1))
+    boxes=[group_box(g) for g in groups]
+    direct=distance(boxes[0],role_markers['主推'])+distance(boxes[1],role_markers['次推'])
+    swapped=distance(boxes[0],role_markers['次推'])+distance(boxes[1],role_markers['主推'])
+    if abs(direct-swapped) < max(12,min(direct,swapped)*.2):
+        raise ValueError('两组鞋位与主次推标注距离相近，请将文字移近对应鞋子后重试')
+    roles=['主推','次推'] if direct < swapped else ['次推','主推']
+    for group,box,role in zip(groups,boxes,roles):
+        for item in group:
+            item['role']=role
+            item['roleGroupBox']=box[:]
+            item['roleBinding']='global_marker_group'
 
 
 def diagnose_result(request):
