@@ -91,7 +91,7 @@ var AI_Shoe_CEP = (function () {
         report.scanned++;
         try {
           color = label(l); report.labels[color] = (report.labels[color] || 0) + 1;
-          role = ({red:'主推',grain:'次推',green:'次推',orange:'单鞋主推',yellow:'单鞋次推',magenta:'鞋底',violet:'双鞋',indigo:'双鞋'})[color] || (color === 'none' ? inherited : '');
+          role = ({red:'主推',grain:'次推',green:'次推',orange:'单鞋主推',orangeColor:'单鞋主推',yellow:'单鞋次推',yellowColor:'单鞋次推',magenta:'鞋底',magentaColor:'鞋底',violet:'双鞋',indigo:'双鞋'})[color] || (color === 'none' ? inherited : '');
           if(purple)role='双鞋';
           b = bounds(l);
         } catch (e) { reason = '读取失败：' + e.message; report.errors.push({layerId:l.id,name:name,error:reason}); }
