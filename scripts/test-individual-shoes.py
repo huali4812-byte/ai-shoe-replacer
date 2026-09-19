@@ -16,12 +16,8 @@ assert v.generation_groups([]) == []
 c = {'role': '次推', 'cropBox': [100, 0, 130, 30]}
 d = {'role': '次推', 'cropBox': [115, 0, 145, 30]}
 assert v.generation_groups([a, c, b, d]) == [[a, b], [c, d]]
-try:
-    v.generation_groups([a, b, {'role':'主推','cropBox':[200,0,230,30]}])
-except ValueError as e:
-    assert '奇数只' in str(e)
-else:
-    raise AssertionError('odd same-role shoes must stop')
+odd = v.generation_groups([a, b, {'role':'主推','cropBox':[200,0,230,30]}])
+assert sorted(map(len,odd)) == [1,2], odd
 with tempfile.TemporaryDirectory() as folder:
     def region(name, box, support):
         mask = Image.new('L', (box[2]-box[0], box[3]-box[1]), 0)
@@ -69,4 +65,4 @@ with tempfile.TemporaryDirectory() as folder:
 
     neg = region('negative', [-10, -10, 30, 30], (15, 15, 20, 20))
     v.validate_shoe_supports((40, 40), [neg])
-print('PASS pair generation: same-role shoes paired, roles separated, odd count rejected, mask reconciliation safe')
+print('PASS pair generation: clear pairs preferred, roles separated, odd/ambiguous shoes fall back safely')

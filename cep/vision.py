@@ -83,7 +83,8 @@ def group_nearby_regions(regions):
 
 
 def _pair_cost(a, b):
-    ab, bb = a.get('bounds') or a.get('box'), b.get('bounds') or b.get('box')
+    ab = a.get('bounds') or a.get('box') or a.get('cropBox')
+    bb = b.get('bounds') or b.get('box') or b.get('cropBox')
     ac=((ab[0]+ab[2])/2,(ab[1]+ab[3])/2);bc=((bb[0]+bb[2])/2,(bb[1]+bb[3])/2)
     sa=math.sqrt(max(1,(ab[2]-ab[0])*(ab[3]-ab[1])))
     sb=math.sqrt(max(1,(bb[2]-bb[0])*(bb[3]-bb[1])))
@@ -91,21 +92,30 @@ def _pair_cost(a, b):
 
 
 def _pair_bucket(items):
-    """Return clear geometric pairs; never mix ambiguous people."""
+    """Prefer clear physical pairs, with safe single-shoe fallback.
+
+    A missed or false-positive detection must not block every valid shoe in the
+    layer. Ambiguous shoes retain the older independent generation behavior.
+    """
+    if len(items)==0:return []
     if len(items)==1:return [[items[0]]]
     if len(items)==2:return [[items[0],items[1]]]
-    if len(items)%2:raise ValueError('同款鞋检测为奇数只，无法按一双一双生成')
-    def match(rest):
+    def match(rest, allow_single):
         if not rest:return [(0,[])]
         first=rest[0];out=[]
+        if allow_single:
+            for score,groups in match(rest[1:],False):
+                out.append((score,[[first]]+groups))
         for i in range(1,len(rest)):
             second=rest[i]
-            for score,pairs in match(rest[1:i]+rest[i+1:]):
-                out.append((score+_pair_cost(first,second),[[first,second]]+pairs))
+            for score,groups in match(rest[1:i]+rest[i+1:],allow_single):
+                out.append((score+_pair_cost(first,second),[[first,second]]+groups))
         return out
-    choices=sorted(match(list(items)),key=lambda x:x[0])
+    choices=sorted(match(list(items),len(items)%2==1),key=lambda x:x[0])
+    # If several assignments are similarly plausible, generating each shoe
+    # independently is safer than pairing shoes from different people.
     if len(choices)>1 and choices[1][0]-choices[0][0] < max(.5,choices[0][0]*.3):
-        raise ValueError('同款多双鞋几何配对不明确，不能混合不同人物')
+        return [[item] for item in items]
     return choices[0][1]
 
 
