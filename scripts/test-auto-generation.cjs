@@ -13,6 +13,6 @@ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'auto-shoe-'));
 for(const f of [composite,pair,bdLogo])fs.copyFileSync(input,f);
 let four;
 await run({api:{generate:async(original,refs,prompt,options)=>{four={original,refs,prompt,options};return input;}},task:{input,shoeCount:2,material:{cutout:planFile,references:[composite,pair,bdLogo]}},prompt:'旧提示不应进入四图模式'});
-assert.equal(four.original,composite);assert.deepEqual(four.refs,[pair,input,bdLogo]);assert.equal(four.prompt,'图1、图2两张图为同一款鞋子，把这款鞋子的所有元素如配色、Logo、印花、纹理、材质等1:1还原，穿到图3脚上，鞋身Logo文字细节以图4为准；图4仅提供Logo文字细节，不复制图4中魔术贴打开或展开的状态，魔术贴保持图3中每只鞋原有的闭合状态、方向和遮挡。');assert.deepEqual(four.options.logoReferenceIndices,[2]);
+assert.equal(four.original,composite);assert.deepEqual(four.refs,[pair,input,bdLogo]);assert.equal(four.prompt,'图1、图2为同一款鞋子，把这款鞋子的所有元素如配色、Logo、印花、纹理、材质等1:1还原，穿到图3脚上，鞋身Logo细节以图4为准。');assert.deepEqual(four.options.logoReferenceIndices,[2]);assert.equal(four.options.imageLabels.length,4);assert(four.options.imageLabels[0].includes('图1：目标鞋合成图'));assert(four.options.imageLabels[1].includes('图2：目标鞋 bd_pair 参考图'));assert(four.options.imageLabels[2].includes('图3：待换鞋场景图'));assert(four.options.imageLabels[3].includes('图4：目标鞋 Logo 参考图'));
 console.log('PASS inline Gemini view/detail prompt and catalog four-image mode: fixed image order, short user prompt, single generation accepted');
 }finally{fs.rmSync(dir,{recursive:true,force:true});}})().catch(e=>{console.error(e);process.exitCode=1});

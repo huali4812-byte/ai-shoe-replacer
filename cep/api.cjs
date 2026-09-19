@@ -85,6 +85,12 @@ async function test() {
     return { model: c.model, listed: null, modelListChecked: false, diagnostic: e.message };
   }
 }
+function interleaveImageLabels(prompt, images, labels) {
+  const content=[{type:'text',text:prompt}];
+  if(labels!==undefined && (!Array.isArray(labels)||labels.length!==images.length||labels.some(x=>typeof x!=='string'||!x.trim())))throw Error('图片标签数量必须与上传图片一致');
+  images.forEach((image,i)=>{if(labels)content.push({type:'text',text:labels[i]});content.push(image);});
+  return content;
+}
 async function generate(original, references, prompt, options = {}) {
   const logDir=path.join(os.homedir(),"Pictures","AI-Shoe-Results","diagnostics");fs.mkdirSync(logDir,{recursive:true});
   const logFile=path.join(logDir,Date.now()+"-"+crypto.randomBytes(4).toString("hex")+".jsonl"),epoch=Date.now();
@@ -93,7 +99,7 @@ async function generate(original, references, prompt, options = {}) {
   try {
   const c=config(); if(!references.length) throw Error('请选择目标鞋参考图');
   const started=Date.now();
-  const content=[{type:'text',text:prompt}];
+  const images=[],uploadManifest=[];
   for(const [imageIndex,file] of [original].concat(references).entries()){const ext=path.extname(file).toLowerCase(),mime={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg'}[ext];if(!mime)throw Error('原图和参考图仅支持 PNG/JPEG');let raw;
     if(imageIndex>0&&(options.soleReferenceIndices||[]).includes(imageIndex-1)){
       try{const prepared=require('./sole-reference.cjs').prepare(file);raw=prepared.bytes;log('sole_reference_prepared',{referenceIndex:imageIndex-1,...prepared.info});}
@@ -103,11 +109,15 @@ async function generate(original, references, prompt, options = {}) {
       try{const prepared=require('./logo-reference.cjs').prepare(file);raw=prepared.bytes;log('logo_reference_prepared',{referenceIndex:imageIndex-1,...prepared.info});}
       catch(e){log('logo_reference_fallback',{referenceIndex:imageIndex-1,reason:e.message});}
     }
-    if(!raw)raw=prepareImage(file);content.push({type:'image_url',image_url:{url:'data:'+(raw[0]===137?'image/png':'image/jpeg')+';base64,'+raw.toString('base64')}});}
+    if(!raw)raw=prepareImage(file);
+    images.push({type:'image_url',image_url:{url:'data:'+(raw[0]===137?'image/png':'image/jpeg')+';base64,'+raw.toString('base64')}});
+    uploadManifest.push({image:imageIndex+1,source:path.basename(file),sourceBytes:fs.statSync(file).size,preparedBytes:raw.length,preparedSha256:crypto.createHash('sha256').update(raw).digest('hex'),label:options.imageLabels&&options.imageLabels[imageIndex]||null});
+  }
+  const content=interleaveImageLabels(prompt,images,options.imageLabels);
   const inputBytes=[original].concat(references).reduce((n,f)=>n+fs.statSync(f).size,0);
   const requestedAspect=options.aspectRatio||aspectRatio(original);
   const payload=JSON.stringify({model:c.model,messages:[{role:'user',content}],extra_body:{google:{image_config:{aspect_ratio:requestedAspect}}}});
-  log('payload',{originalBytes:inputBytes,preparedBytes:content.slice(1).reduce((n,p)=>n+Buffer.from(p.image_url.url.split(',')[1],'base64').length,0),requestBytes:Buffer.byteLength(payload),images:content.length-1,model:c.model,requestedAspect});
+  log('payload',{originalBytes:inputBytes,preparedBytes:images.reduce((n,p)=>n+Buffer.from(p.image_url.url.split(',')[1],'base64').length,0),requestBytes:Buffer.byteLength(payload),images:images.length,imageParts:uploadManifest,model:c.model,requestedAspect});
   console.log('[AI] files='+inputBytes+' bytes, request='+Buffer.byteLength(payload)+' bytes, model='+c.model);
   const headers={'Authorization':'Bearer '+c.key,'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)};
   // Exact request identity includes endpoint, model, prompt and all image bytes.
@@ -185,4 +195,4 @@ async function analyze(files, prompt) {
   }
 }
 function analysisIdentity(){const c=config();return crypto.createHash('sha256').update(c.base+'|'+c.model+'|text-v3').digest('hex');}
-module.exports = { test, generate, analyze, analysisIdentity };
+module.exports = { test, generate, analyze, analysisIdentity, interleaveImageLabels };
