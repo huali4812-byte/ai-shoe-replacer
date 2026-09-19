@@ -126,9 +126,11 @@ def _pair_bucket(items):
     return choices[0][1]
 
 
-def generation_groups(regions, structure=False):
-    """Generate one physical pair at a time, grouped only within one role."""
+def generation_groups(regions, structure=False, generation_kind=None):
+    """Generate pairs only for pair tasks; marked single tasks stay single."""
     if structure:return group_nearby_regions(regions)
+    if generation_kind in ('single_main','single_secondary','sole'):
+        return [[r] for r in regions]
     buckets={}
     for region in regions:buckets.setdefault(region.get('role') or '__single_product__',[]).append(region)
     groups=[]
@@ -778,7 +780,7 @@ class Vision:
                 for item in accepted:
                     detections[item['index']]['skip'] = 'role_assignment_uncertain'
                 accepted = []
-        for group_index, group in enumerate(generation_groups(accepted, structure)):
+        for group_index, group in enumerate(generation_groups(accepted, structure, request.get('generationKind'))):
             full = np.zeros((original.height, original.width), dtype=bool)
             bounds = [original.width, original.height, 0, 0]
             for item in group:

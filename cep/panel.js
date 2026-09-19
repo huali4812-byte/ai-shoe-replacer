@@ -103,7 +103,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         const visionFolder=path.join(dir,'vision',t.id);
         fs.mkdirSync(visionFolder,{recursive:true});
         t.status='本地检测与分割鞋部（首次加载模型可能较慢）';showBatchStage('正在识别鞋部 · 图层 '+t.layerId+'（首次加载模型可能较慢）');render();
-        const visionResult=await vision.request({action:'detect',source:t.protection.sourceFile,folder:visionFolder,roleMarkers:t.dualRole?t.protection.roleMarkers:null,randomPairRoles:!!t.dualRole&&!!t.protection.randomPairRoles,randomMainPair:t.protection.randomMainPair,sceneType:t.protection.sceneType});
+        const visionResult=await vision.request({action:'detect',source:t.protection.sourceFile,folder:visionFolder,generationKind:t.generationKind,roleMarkers:t.dualRole?t.protection.roleMarkers:null,randomPairRoles:!!t.dualRole&&!!t.protection.randomPairRoles,randomMainPair:t.protection.randomMainPair,sceneType:t.protection.sceneType});
         fs.writeFileSync(path.join(visionFolder,'detection.json'),JSON.stringify(visionResult,null,2));
         if(!visionResult.regions||!visionResult.regions.length)throw Error('自动检测未找到鞋部：'+(visionResult.status||'unknown'));
         t.detectionWarnings=visionResult.detections.filter(d=>d.skip).map(d=>d.skip);
@@ -141,7 +141,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
   }
   async function retryDetection(t){
     const folder=path.join(path.dirname(t.protection.sourceFile),'review-'+t.id+'-'+Date.now());fs.mkdirSync(folder,{recursive:true});
-    const result=await vision.request({action:'detect',source:t.protection.sourceFile,folder,roleMarkers:t.dualRole?t.protection.roleMarkers:null,randomPairRoles:!!t.dualRole&&!!t.protection.randomPairRoles,randomMainPair:t.protection.randomMainPair,sceneType:t.protection.sceneType});
+    const result=await vision.request({action:'detect',source:t.protection.sourceFile,folder,generationKind:t.generationKind,roleMarkers:t.dualRole?t.protection.roleMarkers:null,randomPairRoles:!!t.dualRole&&!!t.protection.randomPairRoles,randomMainPair:t.protection.randomMainPair,sceneType:t.protection.sceneType});
     fs.writeFileSync(path.join(folder,'detection.json'),JSON.stringify(result,null,2));
     const key=r=>maskKey({...r,role:r.role||t.role});
     const byKey=new Map((result.regions||[]).map(r=>[key(r),r]));
@@ -167,12 +167,14 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     state.tasks=[];
     state.scan.tasks.forEach(candidate=>{for(let slot=0;slot<1;slot++){
       const isDisplay=candidate.taskType==='product_display';
-      const options=isDisplay?[]:state.products.filter(p=>p.sku.trim()===state.targetSku&&p.role===candidate.role);
+      const targetRole=({单鞋主推:'主推',单鞋次推:'次推',鞋底:'主推'})[candidate.role]||candidate.role;
+      const options=isDisplay?[]:state.products.filter(p=>p.sku.trim()===state.targetSku&&p.role===targetRole);
       const dualRole=candidate.role==='双鞋';
+      const generationKind=({单鞋主推:'single_main',单鞋次推:'single_secondary',鞋底:'sole'})[candidate.role]||(dualRole?'pair':'auto');
       const roleProducts={};for(const role of ['主推','次推']){const found=state.products.filter(p=>p.sku.trim()===state.targetSku&&p.role===role);if(found.length===1)roleProducts[role]=found[0];}
       const product= isDisplay?null : dualRole?(roleProducts['主推']&&roleProducts['次推']?roleProducts['主推']:null):(options.length===1?options[0]:null);
       const status=isDisplay?'产品展示：待进入智能对象读取展示行':product?'待素材匹配':candidate.role==='双鞋'?'已跳过：紫色图需要唯一主推和次推款色':options.length>1?'已跳过：Excel 同款同角色存在多个颜色':'已跳过：未选择新货号或所选货号缺少该角色款色';
-      state.tasks.push({...candidate,dualRole,roleProducts,id:Date.now()+'-'+candidate.layerId+'-'+slot,slot:slot+1,product,confirmed:false,status});
+      state.tasks.push({...candidate,role:targetRole,markerRole:candidate.role,generationKind,dualRole,roleProducts,id:Date.now()+'-'+candidate.layerId+'-'+slot,slot:slot+1,product,confirmed:false,status});
     }});
     matchAll();
   }
