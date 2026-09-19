@@ -82,13 +82,41 @@ def group_nearby_regions(regions):
     return groups
 
 
-def generation_groups(regions, structure=False):
-    """One detected shoe per generation, never split by connected components.
+def _pair_cost(a, b):
+    ab, bb = a.get('bounds') or a.get('box'), b.get('bounds') or b.get('box')
+    ac=((ab[0]+ab[2])/2,(ab[1]+ab[3])/2);bc=((bb[0]+bb[2])/2,(bb[1]+bb[3])/2)
+    sa=math.sqrt(max(1,(ab[2]-ab[0])*(ab[3]-ab[1])))
+    sb=math.sqrt(max(1,(bb[2]-bb[0])*(bb[3]-bb[1])))
+    return math.hypot(ac[0]-bc[0],ac[1]-bc[1])/((sa+sb)/2)+abs(math.log(sa/sb))
 
-    Structure diagrams retain the existing grouped path. Role assignment happens
-    before this step and is not inferred from crop position.
-    """
-    return group_nearby_regions(regions) if structure else [[r] for r in regions]
+
+def _pair_bucket(items):
+    """Return clear geometric pairs; never mix ambiguous people."""
+    if len(items)==1:return [[items[0]]]
+    if len(items)==2:return [[items[0],items[1]]]
+    if len(items)%2:raise ValueError('同款鞋检测为奇数只，无法按一双一双生成')
+    def match(rest):
+        if not rest:return [(0,[])]
+        first=rest[0];out=[]
+        for i in range(1,len(rest)):
+            second=rest[i]
+            for score,pairs in match(rest[1:i]+rest[i+1:]):
+                out.append((score+_pair_cost(first,second),[[first,second]]+pairs))
+        return out
+    choices=sorted(match(list(items)),key=lambda x:x[0])
+    if len(choices)>1 and choices[1][0]-choices[0][0] < max(.5,choices[0][0]*.3):
+        raise ValueError('同款多双鞋几何配对不明确，不能混合不同人物')
+    return choices[0][1]
+
+
+def generation_groups(regions, structure=False):
+    """Generate one physical pair at a time, grouped only within one role."""
+    if structure:return group_nearby_regions(regions)
+    buckets={}
+    for region in regions:buckets.setdefault(region.get('role') or '__single_product__',[]).append(region)
+    groups=[]
+    for role in sorted(buckets):groups.extend(_pair_bucket(buckets[role]))
+    return groups
 
 
 def merge_overlapping_regions(source, regions, folder):
@@ -772,7 +800,7 @@ class Vision:
             # The pre-generation detection items do not have final mask paths.
             report['regions'] = merge_overlapping_regions(original, report['regions'], folder)
             validate_shoe_supports(original.size, report['regions'])
-            report['generationMode'] = 'individual_shoes'
+            report['generationMode'] = 'shoe_pairs'
         draw = ImageDraw.Draw(overlay)
         for index, detection in enumerate(detections):
             if detection.get('skip'):

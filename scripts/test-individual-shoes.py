@@ -10,9 +10,18 @@ v = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(v)
 a = {'role': '主推', 'cropBox': [0, 0, 30, 30]}
 b = {'role': '主推', 'cropBox': [15, 0, 45, 30]}
-assert v.generation_groups([a, b]) == [[a], [b]]
+assert v.generation_groups([a, b]) == [[a, b]]
 assert len(v.generation_groups([a, b], structure=True)) == 1
 assert v.generation_groups([]) == []
+c = {'role': '次推', 'cropBox': [100, 0, 130, 30]}
+d = {'role': '次推', 'cropBox': [115, 0, 145, 30]}
+assert v.generation_groups([a, c, b, d]) == [[a, b], [c, d]]
+try:
+    v.generation_groups([a, b, {'role':'主推','cropBox':[200,0,230,30]}])
+except ValueError as e:
+    assert '奇数只' in str(e)
+else:
+    raise AssertionError('odd same-role shoes must stop')
 with tempfile.TemporaryDirectory() as folder:
     def region(name, box, support):
         mask = Image.new('L', (box[2]-box[0], box[3]-box[1]), 0)
@@ -22,14 +31,13 @@ with tempfile.TemporaryDirectory() as folder:
         return {'box': box, 'mask': file}
     r1 = region('a', [0, 0, 40, 40], (5, 5, 10, 10))
     r2 = region('b', [0, 0, 40, 40], (25, 25, 30, 30))
-    # Well-separated shoes should generate individually
+    # Two shoes of the same product generate as one physical pair.
     groups = v.generation_groups([r1, r2])
-    assert len(groups) == 2 and len(groups[0]) == 1 and len(groups[1]) == 1
+    assert len(groups) == 1 and len(groups[0]) == 2
 
     r3 = region('c', [0, 0, 40, 40], (12, 5, 17, 10))
-    # Detection grouping remains individual; final-mask reconciliation merges conflicts
     groups_overlap = v.generation_groups([r1, r3])
-    assert len(groups_overlap) == 2 and all(len(g) == 1 for g in groups_overlap)
+    assert len(groups_overlap) == 1 and len(groups_overlap[0]) == 2
     source = Image.new('RGB', (40, 40), 'white')
     source_path = Path(folder) / 'source.png'
     source.save(source_path)
@@ -44,12 +52,8 @@ with tempfile.TemporaryDirectory() as folder:
 
     r4 = region('d', [0, 0, 40, 40], (8, 5, 14, 10))
     real_overlap = [dict(final_regions[0]), {**dict(final_regions[1]), **r4}]
-    try:
-        v.merge_overlapping_regions(source, real_overlap, Path(folder))
-    except ValueError as e:
-        assert '主体蒙版重叠' in str(e)
-    else:
-        raise AssertionError('same-role overlapping shoes must not be merged into one request')
+    reconciled = v.merge_overlapping_regions(source, real_overlap, Path(folder))
+    assert len(reconciled) == 2 and all(r.get('noMaskExpansion') for r in reconciled)
 
     # Different products stay independent and use their exact semantic masks,
     # because only the optional 4px-per-side expansion conflicts here.
@@ -65,4 +69,4 @@ with tempfile.TemporaryDirectory() as folder:
 
     neg = region('negative', [-10, -10, 30, 30], (15, 15, 20, 20))
     v.validate_shoe_supports((40, 40), [neg])
-print('PASS individual shoes: crop overlap allowed, expanded mask conflict rejected, negative crop supported')
+print('PASS pair generation: same-role shoes paired, roles separated, odd count rejected, mask reconciliation safe')
