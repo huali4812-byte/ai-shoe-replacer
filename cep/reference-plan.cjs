@@ -23,6 +23,8 @@ function classify(file){
    'unknown';
  
  const detail=
+   /合成图/.test(text)?'composite':
+   has(['pair'])&&has(['bd'])?'pair':
    has(['logo'])||/标志|字标|品牌|logo/.test(text)?'logo':
    has(['sole','bottom'])||/鞋底|大底|中底/.test(text)?'sole':
    has(['toe','front'])||/鞋头|包头/.test(text)?'toe':

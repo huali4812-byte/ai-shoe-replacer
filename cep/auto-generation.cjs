@@ -8,6 +8,17 @@ async function run({api,task,prompt,maskFirst=false,options={},record=()=>{}}){
  task.autoGeneration=log;record(log);
  try{
   const fullPlan=references.plan(task.material,{view:'unknown'});
+  const byName=pattern=>fullPlan.entries.find(e=>pattern.test(require('path').basename(e.sourceFile||e.file)));
+  const compositeEntry=byName(/_合成图(?:\.[^.]+)?$/i),pairEntry=byName(/_bd_pair(?:\.[^.]+)?$/i),bdLogoEntry=byName(/_bd_logo(?:\.[^.]+)?$/i);
+  if(compositeEntry&&pairEntry&&bdLogoEntry){
+   const shortPrompt='图1、图2两张图为同一款鞋子，把这款鞋子的所有元素如配色、Logo、印花、纹理、材质等1:1还原，穿到图3脚上，鞋身Logo文字细节以图4为准；图4仅提供Logo文字细节，不复制图4中魔术贴打开或展开的状态，魔术贴保持图3中每只鞋原有的闭合状态、方向和遮挡。';
+   const selected=[compositeEntry,pairEntry,bdLogoEntry];
+   const plan={...fullPlan,entries:selected,files:selected.map(e=>e.file),warnings:(fullPlan.warnings||[]).concat('用户验证四图模式：合成图、bd_pair、场景、bd_logo')};
+   task.referencePlan=plan;log.fullReferenceCount=fullPlan.files.length;log.referenceStrategy='catalog_composite_pair_scene_logo';log.references=plan;log.isolatedShoe=false;log.logoReferenceIndices=[2];log.logoStatus='dedicated_bd_logo_bound';log.soleReferenceIndices=[];log.soleStatus='not_used_in_four_image_mode';log.imageOrder=[compositeEntry.file,pairEntry.file,task.input,bdLogoEntry.file];
+   const row={attempt:1,strategy:'catalog_four_image',status:'generating'};log.attempts.push(row);record(log);
+   row.output=await api.generate(compositeEntry.file,[pairEntry.file,task.input,bdLogoEntry.file],shortPrompt,{...options,logoReferenceIndices:[2],soleReferenceIndices:[],maxAttempts:1});
+   row.status='received';log.status='received';record(log);return row.output;
+  }
   const primaryEntry=fullPlan.entries.find(e=>e.sourceFile===task.material.cutout)||fullPlan.entries.find(e=>e.detail==='overall')||fullPlan.entries[0];
   if(!primaryEntry)throw Error('缺少目标鞋主参考图');
   const logoEntry=fullPlan.entries.find(e=>e!==primaryEntry&&e.detail==='logo');

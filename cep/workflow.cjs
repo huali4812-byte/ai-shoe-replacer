@@ -78,7 +78,7 @@ async function indexLibrary(root, progress, wantedProducts) {
         const skuHits=items.filter(i=>variants.some(s=>String(i.name||'').split('_')[0].toUpperCase()===s.toUpperCase()));
         const hits=skuHits.filter(i=>{const parts=String(i.name||'').split('_');return colorMatch(parts[1],p.color);});
         const cutouts=hits.filter(i=>/_t_side$/i.test(i.name)&&i.ext.toLowerCase()==='png');
-        const refs=hits.filter(i=>/_t_(logo|sideright|sole|back|heel)$/i.test(i.name));
+        const refs=hits.filter(i=>/_t_(logo|sideright|sole|back|heel)$/i.test(i.name)||/_bd_(pair|logo)$/i.test(i.name)||/_合成图$/i.test(i.name));
         const file=i=>path.join(root,'images',i.id+'.info',i.name+'.'+i.ext);
         const reason=cutouts.length!==1?'透明侧面素材需唯一，实际 '+cutouts.length:!refs.length?'缺少参考图':'';
         diagnostics.push(p.sku+' / '+p.color+'：变体['+variants.join(',')+']，查询['+queryStats.join(',')+']，合并 '+items.length+' 条，货号匹配 '+skuHits.length+' 条，同色 '+hits.length+' 条，'+(reason||'分组成功'));
