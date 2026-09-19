@@ -2,7 +2,7 @@
 const references=require('./reference-plan.cjs');
 const referenceGuide=require('./reference-guide.cjs');
 const INLINE_INSTRUCTIONS='\n【唯一款式依据】目标鞋主参考是唯一完整款式依据；如另有鞋底细节图，它只用于鞋底纹理、分区和颜色，不代表需要露出鞋底。参考图不是要复制到画面的产品照片。不要生成参考图的白底、黑底、阴影、第二只鞋或展示构图。\n【严格一对一替换】编辑蒙版内原来有几只鞋，输出仍只能有相同数量。每只新鞋必须占据对应旧鞋的位置、大小、朝向、左右脚、透视和遮挡；不得新增、复制或悬空任何鞋体、鞋带、魔术贴、Logo、提拉环、鞋底或零件。\n【场景保护】只替换蒙版内鞋体。人物、腿、袜子、裤子、地面、背景、文字、光影和蒙版外内容保持第一张图不变。不要输出产品图、拼图、对比图或说明文字，只返回与第一张相同尺寸的最终图。';
-const SINGLE_PROMPT=role=>`【任务】图1、图2为同一款${role}目标鞋；把图3当前编辑区域中唯一一只原鞋完整替换为该目标鞋，Logo细节以图4为准。当前任务只能输出一只鞋，禁止生成第二只鞋、另一只脚、参考图配对鞋或独立零件。\n【单鞋对应】保持原鞋位置、大小、朝向、左右脚、透视、倾斜、穿着、遮挡和落地关系。图1决定整体款式结构与配色，图2只补充对应可见面的细节，图4只补充Logo及承载部件；不复制参考图背景、构图、额外鞋体或展开的魔术贴。\n【完整换款】先清除原鞋旧魔术贴、搭扣、鞋带系统、Logo、侧墙结构、孔洞、凸块、拼接、鞋底和旧色，再按目标重建；不得只换颜色或残留旧款结构。只使用当前可见面对应的内侧、外侧、鞋面、后跟或鞋底结构，不跨侧复制Logo、环扣和装饰，不旋转成参考角度。\n【部件准确】每只鞋只保留目标实际存在的一套主魔术贴并正常闭合；Logo按图4的文字、颜色、比例、方向和附着位置贴合透视，禁止镜像、乱码、重复或漂浮。网布、皮革、包边、鞋带、织带、魔术贴、缝线、Logo、拉环、中底和外底分别按目标取色与材质，不继承原鞋颜色或互相串色。\n【场景保护】只替换这一只鞋；人物、腿、袜子、裤脚、地面、背景、文字、光影和编辑区域外内容保持图3不变。最终确认输出恰好一只目标鞋，并只返回与图3相同尺寸的结果图。`;
+const SINGLE_PROMPT=role=>`【输入顺序】图1是唯一待编辑的原场景；图2是${role}目标鞋合成图；图3是同款成双参考图，只补充目标鞋内外侧和材质；图4只补充Logo及其承载部件。\n【任务】只把图1当前编辑区域中原有的唯一一只原鞋完整替换为图2目标鞋。输出必须仍是图1场景，且恰好只有原位置的一只鞋。禁止把图2、图3或图4当作待编辑底图，禁止复制参考图背景、产品构图、第二只鞋、另一只脚或独立零件。\n【单鞋对应】新鞋必须完整占据原鞋轮廓，保持原鞋位置、大小、朝向、左右脚、透视、倾斜、穿着、遮挡、鞋口连接和落地关系。不得悬空、移动、放大、改成产品展示角度，不得把鞋头、鞋底、后跟或另一只参考鞋拼接到原鞋之外。\n【完整换款】先清除原鞋旧魔术贴、搭扣、鞋带系统、Logo、侧墙结构、孔洞、凸块、拼接、鞋底和旧色，再按图2重建；图3只补充当前可见面，不得决定鞋子数量。只使用当前可见面对应的内侧、外侧、鞋面、后跟或鞋底结构，不跨侧复制Logo、环扣和装饰。\n【部件准确】只保留目标实际存在的一套主魔术贴并正常闭合；Logo按图4的文字、颜色、比例、方向和附着位置贴合透视，禁止镜像、乱码、重复或漂浮。网布、皮革、包边、鞋带、织带、魔术贴、缝线、Logo、拉环、中底和外底分别按目标取色与材质。\n【场景保护】除图1原鞋区域外，人物、腿、袜子、裤脚、地面、背景、文字、图形标注、光影和所有其他像素保持图1不变。最终只返回与图1完全相同尺寸和构图的结果图。`;
 const SOLE_PROMPT='把图1中当前可见的鞋底换成图2的鞋底。童鞋鞋底为视觉主体，严格还原图2的大底轮廓、分区、颜色、防滑纹路、沟槽、颗粒、边缘和Logo；鞋底采用半透明透视效果，透过鞋底可以隐约看见脚底足型轮廓。保持图1中脚、腿、袜子、鞋面、姿态、朝向、透视、位置、数量、遮挡、背景和构图不变，不新增鞋、不改变成侧视鞋，不复制图2的黑底或产品展示构图。柔和均匀影棚柔光，干净通透，电商童鞋卖点展示图。只返回与图1相同尺寸的最终图。';
 const REPLACEMENT_OVERRIDE='\n【最终换款硬规则，本段优先于前文】原场景鞋只提供位置、大小、朝向、左右脚、透视、脚部遮挡和落地关系；原鞋的款式结构一律不得保留。必须先清除原鞋的魔术贴、搭扣、鞋带系统、Logo、侧墙图案、开孔、凸块、拼接线和装饰，再完全按目标主参考重建。每只目标鞋只能有目标参考实际显示的一套魔术贴：参考为一条就只能生成一条，禁止把原鞋魔术贴留在下面或旁边，禁止叠加、分叉、上下双层或生成第二条；参考没有魔术贴则不得生成。鞋侧仅采用目标参考可见的轮廓、拼接和装饰，绝不能残留原鞋Logo、字母、圆形标、弧形凸纹、孔洞、色块或原款侧墙特征。看不清的目标细节应简化为干净连续的目标鞋材质，不得借用原鞋特征补全。\n【Logo位置与方向锁定】Logo不是自由装饰，也不是整鞋贴纸。先确定目标Logo实际附着在哪一个部件，再按该部件的局部坐标重建：若Logo位于横跨脚背的魔术贴，必须沿魔术贴长轴排列，处在参考显示的同一端/同一高度/同一方向，保持字母顺序、字距、整体宽高比例、基线和与边缘的间距；不得移到鞋侧、鞋舌、后跟或鞋底，不得旋转90度、镜像、弯曲变形、截断、重复或漂浮。Logo必须贴合承载面的透视、弯曲、缝线和遮挡，只在参考明确可见的区域出现；参考未显示Logo时不要凭原鞋补回。\n【鞋外侧颜色与结构锁定】每只鞋先判断场景中实际可见的目标鞋面，不按画面左右、鞋头朝向或原鞋颜色猜测内外侧。该可见面颜色以目标对应参考的分区为准：网布、皮革覆盖片、侧墙装饰、鞋头包边、鞋带、拉环和魔术贴分别取色；不能用目标整鞋平均色覆盖外侧，不能把原鞋外侧颜色、另一面的颜色或相邻部件颜色带入。保留目标参考明确存在的明暗分区、边界、纹理和材质；光照只产生同色明暗变化，不改变色相、分区或材料归属。\n【魔术贴与鞋侧层级】每只鞋只有目标参考中横跨脚背的那一条宽魔术贴闭合带；鞋侧纵向或斜向的窄皮条、织带、包边和骨架仅是鞋侧固定装饰，必须停留在鞋侧，不能横跨脚背，不能延伸成第二条魔术贴，不能与主魔术贴上下叠放。主魔术贴的起点、终点、宽度、圆角、缝线和连接位置严格照目标主参考；可见品牌文字或Logo应完整位于这一条主魔术贴上，不得截断、拆分或复制到鞋侧。\n【鞋底后跟不得变形】严格保持目标主参考的鞋头包边、中底厚度、外底高度和后跟轮廓比例；禁止把后跟放大为灰色硬壳、厚平台、楔形块或外凸配重，禁止因原鞋结构而增厚鞋底。场景透视只改变观看角度，不改变目标鞋真实结构比例。';
 async function run({api,task,prompt,maskFirst=false,options={},record=()=>{}}){
@@ -55,17 +55,24 @@ async function run({api,task,prompt,maskFirst=false,options={},record=()=>{}}){
 
 【输出前检查】
 确认两只原鞋均已替换，输出恰好两只同款同配色目标鞋；两只鞋分别保持原位置、大小、朝向、左右脚、透视和遮挡；内外侧结构正确；原鞋结构和旧色已清除；魔术贴数量正确且正常闭合；Logo来自图4并位于正确承载面；小部件颜色和材质来自目标参考；人物、裤脚、袜子、地面和背景保持不变。最终只输出与图3相同尺寸的换鞋结果图。`;
-   const imageLabels=[
+   const imageLabels=singleRole?[
+    '【图1：唯一待编辑原场景】只替换其中当前编辑区域原有的一只鞋，其余像素和构图保持不变。',
+    '【图2：目标鞋合成图】只提供目标款式、轮廓、结构和配色，不提供输出场景或鞋子数量。',
+    '【图3：目标鞋成双参考图】只补充同款鞋内外侧、材质和当前可见面，不得复制第二只鞋或产品背景。',
+    '【图4：目标鞋 Logo 参考图】只补充Logo文字、颜色、比例、材质和附着位置。'
+   ]:[
     '【图1：目标鞋合成图】目标鞋的主要款式、整体轮廓、结构和配色依据。',
     '【图2：目标鞋成双参考图】与图1相同的目标鞋，只补充内外侧、鞋面、鞋底、颜色和材质；不复制其中的鞋子数量、背景或排列。',
-    singleRole?'【图3：待换鞋场景图】只替换当前编辑区域中的唯一一只'+singleRole+'鞋，输出仍只能有一只鞋。':'【图3：待换鞋场景图】只替换当前编辑区域对应的同一个人的一双鞋，其他内容保持不变。',
+    '【图3：待换鞋场景图】只替换当前编辑区域对应的同一个人的一双鞋，其他内容保持不变。',
     '【图4：目标鞋 Logo 参考图】只补充Logo文字、颜色、比例、材质和附着位置；不复制展示状态或额外鞋体。'
    ];
    const selected=[compositeEntry,pairEntry,bdLogoEntry];
-   const plan={...fullPlan,entries:selected,files:selected.map(e=>e.file),warnings:(fullPlan.warnings||[]).concat('用户验证四图模式：合成图、bd_pair、场景、bd_logo')};
-   task.referencePlan=plan;log.fullReferenceCount=fullPlan.files.length;log.referenceStrategy='catalog_composite_pair_scene_logo';log.references=plan;log.isolatedShoe=false;log.logoReferenceIndices=[2];log.logoStatus='dedicated_bd_logo_bound';log.soleReferenceIndices=[];log.soleStatus='not_used_in_four_image_mode';log.imageOrder=[compositeEntry.file,pairEntry.file,task.input,bdLogoEntry.file];
-   const row={attempt:1,strategy:'catalog_four_image',status:'generating'};log.attempts.push(row);record(log);
-   row.output=await api.generate(compositeEntry.file,[pairEntry.file,task.input,bdLogoEntry.file],shortPrompt,{...options,imageLabels,logoReferenceIndices:[2],soleReferenceIndices:[],maxAttempts:1});
+   const plan={...fullPlan,entries:selected,files:selected.map(e=>e.file),warnings:(fullPlan.warnings||[]).concat('用户验证四图模式：场景、合成图、bd_pair、bd_logo')};
+   task.referencePlan=plan;log.fullReferenceCount=fullPlan.files.length;log.referenceStrategy=singleRole?'single_scene_composite_pair_logo':'catalog_composite_pair_scene_logo';log.references=plan;log.isolatedShoe=!!singleRole;log.logoReferenceIndices=[2];log.logoStatus='dedicated_bd_logo_bound';log.soleReferenceIndices=[];log.soleStatus='not_used_in_four_image_mode';log.imageOrder=singleRole?[task.input,compositeEntry.file,pairEntry.file,bdLogoEntry.file]:[compositeEntry.file,pairEntry.file,task.input,bdLogoEntry.file];
+   const row={attempt:1,strategy:singleRole?'single_scene_first_four_image':'catalog_four_image',status:'generating'};log.attempts.push(row);record(log);
+   row.output=singleRole
+    ?await api.generate(task.input,[compositeEntry.file,pairEntry.file,bdLogoEntry.file],shortPrompt,{...options,imageLabels,logoReferenceIndices:[2],soleReferenceIndices:[],maxAttempts:1})
+    :await api.generate(compositeEntry.file,[pairEntry.file,task.input,bdLogoEntry.file],shortPrompt,{...options,imageLabels,logoReferenceIndices:[2],soleReferenceIndices:[],maxAttempts:1});
    row.status='received';log.status='received';record(log);return row.output;
   }
   const primaryEntry=fullPlan.entries.find(e=>e.sourceFile===task.material.cutout)||fullPlan.entries.find(e=>e.detail==='overall')||fullPlan.entries[0];
