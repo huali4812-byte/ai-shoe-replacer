@@ -34,15 +34,22 @@ def expanded_binary_support(mask, radius):
     return support
 
 
-def square_box(box, size, padding=0.16):
+def square_box(box, size, padding=0.24, min_margin=24):
+    """Square AI crop with real source context around every detected shoe.
+
+    Detection boxes can be tight around pull tabs/toes. Use a larger margin and
+    shift the square back inside the canvas instead of introducing off-canvas
+    black padding when source pixels are available on the opposite side.
+    """
     x0, y0, x1, y1 = box
-    side = max(1, math.ceil(max(x1-x0, y1-y0) * (1+padding*2)))
-    cx, cy = (x0+x1)/2, (y0+y1)/2
-    width, height = size
-    # PIL pads off-canvas pixels. The corresponding mask is zero there.
-    left = math.floor(cx-side/2)
-    top = math.floor(cy-side/2)
-    return [left, top, left+side, top+side]
+    extent=max(1,x1-x0,y1-y0)
+    side=max(1,math.ceil(extent+2*max(min_margin,extent*padding)))
+    width,height=size;side=min(side,max(width,height))
+    cx,cy=(x0+x1)/2,(y0+y1)/2
+    left=math.floor(cx-side/2);top=math.floor(cy-side/2)
+    if side<=width:left=min(max(0,left),width-side)
+    if side<=height:top=min(max(0,top),height-side)
+    return [left,top,left+side,top+side]
 
 def safe_box(box, size, xpad=.14, ypad=.18):
     x0,y0,x1,y1=box; w,h=size; bw=max(1,x1-x0); bh=max(1,y1-y0)

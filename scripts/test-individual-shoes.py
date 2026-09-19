@@ -13,6 +13,10 @@ b = {'role': '主推', 'cropBox': [15, 0, 45, 30]}
 assert v.generation_groups([a, b]) == [[a, b]]
 assert len(v.generation_groups([a, b], structure=True)) == 1
 assert v.generation_groups([]) == []
+# Final AI crops keep at least 24%/24px context and shift inside the canvas.
+assert v.square_box([100,100,200,180],(500,500)) == [76,66,224,214]
+edge=v.square_box([10,5,110,85],(500,500))
+assert edge[0] == 0 and edge[1] == 0 and edge[2]-edge[0] == 148
 c = {'role': '次推', 'cropBox': [100, 0, 130, 30]}
 d = {'role': '次推', 'cropBox': [115, 0, 145, 30]}
 assert v.generation_groups([a, c, b, d]) == [[a, b], [c, d]]
