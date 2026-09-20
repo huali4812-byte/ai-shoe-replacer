@@ -36,15 +36,13 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     const wrap=document.createElement('details');wrap.className='revision';wrap.open=form.open||!!r.revisionCandidate;wrap.ontoggle=()=>{form.open=wrap.open;if(wrap.open){expandedTaskCards.add(parent.id);}else if(!r.revisionCandidate&&!displayChildrenHasOpen(parent,r.id)){expandedTaskCards.delete(parent.id);}};
     const label=document.createElement('summary');label.textContent='效果不满意 · '+r.role+' · '+(r.shoeCount>1?'鞋组 '+(index+1)+'（'+r.shoeCount+' 只一起）':'鞋位 '+(index+1));wrap.appendChild(label);
     const note=document.createElement('p');note.textContent='从换鞋前原图重做；当前结果保留，应用后才替换。版本选择限本次面板会话，文件会保存在本机。';wrap.appendChild(note);
-    const candidate=r.revisionCandidate;
-    if(candidate){
+    const candidates=(r.revisionCandidates&&r.revisionCandidates.length?r.revisionCandidates:[r.revisionCandidate].filter(Boolean));
+    if(candidates.length){
+      const current=document.createElement('p');current.textContent='已有 '+candidates.length+' 张重换候选；点击图片打开大图，确认后单独应用。';wrap.appendChild(current);
       const comparison=document.createElement('div');comparison.className='revision-comparison';
-      for(const [text,file] of [['当前生成图',r.preview],['新生成图',candidate.preview],['新版本合成预览',candidate.composition.output]]){
-        const figure=document.createElement('figure'),caption=document.createElement('figcaption'),img=document.createElement('img');caption.textContent=text;img.alt=text;img.src=(typeof require==='function'?require:window.cep_node.require)('url').pathToFileURL(file).href;figure.appendChild(caption);figure.appendChild(img);comparison.appendChild(figure);
-      }
+      candidates.forEach((candidate,ci)=>{const figure=document.createElement('figure'),caption=document.createElement('figcaption'),img=document.createElement('img');caption.textContent='候选 '+(ci+1);img.alt=caption.textContent;img.src=(typeof require==='function'?require:window.cep_node.require)('url').pathToFileURL(candidate.composition.output).href;img.style.cursor='zoom-in';img.onclick=()=>window.open(img.src,'_blank');figure.appendChild(caption);figure.appendChild(img);figure.appendChild(button('应用候选 '+(ci+1),async()=>{await revisionService().apply(parent,r,candidate);updateParent(parent);message('候选 '+(ci+1)+' 已应用，其他候选已归档。');},false));comparison.appendChild(figure);});
       wrap.appendChild(comparison);
-      wrap.appendChild(button('应用新版本',async()=>{await revisionService().apply(parent,r);updateParent(parent);message('新版本已应用，其他已写回鞋位保留。请检查画面并另存 PSB。');},false));
-      wrap.appendChild(button('保留当前版本',async()=>{revisionService().discard(r);message('保留当前版本，新生成文件已归档。');},false));
+      wrap.appendChild(button('全部不采用，保留当前版本',async()=>{revisionService().discard(r);message('已保留当前版本，全部重换候选已归档。');},false));
     }else{
       const reason=document.createElement('select');reason.setAttribute('aria-label','重做原因');
       ['同样条件再试一次','鞋款或配色不准确','朝向、姿态不对','边缘、遮挡不自然','返回图正常，仅重新合成','无人摆拍鞋：重建完整蒙版（不生成）','鞋位或角色识别错误'].forEach(text=>{const option=document.createElement('option');option.value=text;option.textContent=text;reason.appendChild(option);});
@@ -385,15 +383,15 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         row.appendChild(button('确认手动选区',async()=>{const manual=await host('captureManualRegion',t);t.protection=manual;t.exportBox=manual.box;t.visionMask=manual.mask;t.input=manual.input;t.exported=true;t.manualRegion=true;t.status='手动区域已确认，可继续批量换鞋';message(t.status);},!state.scan.working));
       }
       if(t.children){
-        const batchRedo=button('批量生成已勾选的不满意版本',async()=>{
+        const batchRedo=button('批量重换已勾选（每个4张）',async()=>{
           const items=displayChildren.map(r=>({r,form:revisionForms.get(r.id)})).filter(x=>x.form&&x.form.batchSelected);
           if(!items.length)throw Error('请先勾选至少一个鞋位');
-          if(items.some(x=>x.r.written))throw Error('已写回鞋位不能批量重做');
           if(items.some(x=>x.form.part!=='whole'&&!x.form.note.trim()))throw Error('局部批量重做需要每个鞋位填写修改要求；框选为可选');
-          if(!window.confirm('将按每只鞋各自的蒙版和部位参考逐个生成候选版本，其他鞋位不变，可能产生费用。当前版本不会覆盖。是否继续？'))return;
-          message('正在批量生成不满意候选版本…');
-          await revisionService().generateBatch(t,items.map(x=>({r:x.r,options:{reason:x.form.reason,note:x.form.note,part:x.form.part==='whole'?null:x.form.part,change:x.form.change,partMask:x.form.partMask}})));
-          message('批量候选已准备好，请逐个对比后应用或保留。');
+          if(!window.confirm('每个勾选鞋位将生成4张候选，并行上限8，可能产生费用。当前版本不会覆盖。是否继续？'))return;
+          message('正在并行生成重换候选（每个鞋位4张，并行8）…');
+          const result=await revisionService().generateBatch(t,items.map(x=>({r:x.r,options:{reason:x.form.reason,note:x.form.note,part:x.form.part==='whole'?null:x.form.part,change:x.form.change,partMask:x.form.partMask}})),{count:4,concurrency:8});
+          items.forEach(x=>x.form.batchSelected=false);
+          message('已生成 '+result.candidates.length+' 张候选'+(result.failures.length?'，失败 '+result.failures.length+' 张（已保留成功结果）':'')+'；请点击缩略图查看大图后应用。');
         },false);row.appendChild(batchRedo);
         const summary=document.createElement('p');summary.textContent=t.phase==='needs_candidate_review'?'整图待检查：跳过候选尚未确认，不等于完成':t.needsFinalize?'待收尾：下次批量仅完成回写及提示隐藏':t.acceptedWritten?'已接受区域全部写回，最终画面待验收':'';row.appendChild(summary);
         displayChildren.forEach((r,i)=>{if(!r.written&&(r.previewValidation==='invalid'||r.generationState==='no_result'||r.qualityError))row.appendChild(button('重新生成画面鞋位 '+(i+1),async()=>{if(!window.confirm('仅重新生成画面中从左到右第'+(i+1)+'只鞋；原预览将保留归档，其他结果复用。是否加入下次批量？'))return;queueRegeneration(r);t.written=false;message(r.status);},false));});
@@ -461,10 +459,10 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       t.generationState='received';t.previewValidation='unvalidated';t.phase='unvalidated_preview';t.status='已取得结果，待本地验证';
     }catch(e){recordFailure(e,'generation',t);t.generationState='no_result';t.generationError=e.message;t.phase='no_result';t.status='未取得可用结果：'+e.message+'；需明确点击重新生成';}render();}
     // Overlap network generation with serial detection/export, never PS writeback.
-    showBatchStage('边识别边生成 · AI 最多 7 并发，完成后统一回写');
+    showBatchStage('边识别边生成 · AI 最多 8 并发，完成后统一回写');
     const pipelineRequire=typeof require==='function'?require:window.cep_node.require;
     const exported=await pipelineRequire(path.join(folder,'batch-pipeline.cjs')).run({
-      parents:ready,prepare:prepareParent,generate:generateRegion,concurrency:7
+      parents:ready,prepare:prepareParent,generate:generateRegion,concurrency:8
     });
     showBatchStage('正在验证生成结果并回写工作副本');
     let written=0,documentWrites=displayWrites;

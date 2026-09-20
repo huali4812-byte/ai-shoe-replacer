@@ -13,8 +13,8 @@ function createRevisions({api,vision,host,root}) {
     if(!out.output||out.rejected&&out.rejected.length||!out.regions||chosen.some(x=>!out.regions.some(y=>y.id===x.id)))throw Error('合成校验未完整通过，保留当前版本');
     return out;
   }
-  async function generate(p,r,{reason='同样条件再试一次',note='',local=false,repairMode=null,part=null,change='structure',partMask=null}={}){
-    check(r);if(repairMode && (repairMode!=='still_life'||!local||p.dualRole))throw Error('摆拍修复仅适用于无人、无脚部的独立摆拍鞋图');if(r.revisionCandidate)throw Error('请先应用或保留当前版本，再创建下一版');
+  async function generate(p,r,{reason='同样条件再试一次',note='',local=false,repairMode=null,part=null,change='structure',partMask=null,attach=true}={}){
+    check(r);if(repairMode && (repairMode!=='still_life'||!local||p.dualRole))throw Error('摆拍修复仅适用于无人、无脚部的独立摆拍鞋图');if(attach&&(r.revisionCandidates&&r.revisionCandidates.length||r.revisionCandidate))throw Error('请先应用或保留当前候选，再创建新版本');
     const localized=['sole','logo','strap','tongue','inner','outer','sidewall','pullTab','toe','upper','heel'].includes(part);
     if(localized&&partMask&&!fs.existsSync(partMask))throw Error('已记录的 Photoshop 局部选区文件不存在，请重新读取或清除后继续');
     if(localized&&!String(note).trim())throw Error('请输入该部位需要修改的具体要求');
@@ -51,21 +51,23 @@ function createRevisions({api,vision,host,root}) {
       v.outputDiagnosis=await vision.request({action:'diagnose_result',stage:'local',source:copies[0],generated:v.preview,mask:v.refinedMask||copies[1]});
       record(v);
       if(!v.outputDiagnosis.passed)throw Error('局部输出诊断未通过；蒙版外变化仅作记录，最终由合成保护');
-      v.composition=await compose(p,r,v.preview,folder,v.refinedMask||v.editMask);v.status='candidate';record(v);r.revisionCandidate=v;return v;
+      v.composition=await compose(p,r,v.preview,folder,v.refinedMask||v.editMask);v.status='candidate';record(v);if(attach){r.revisionCandidates=[v];r.revisionCandidate=v;}return v;
     }catch(e){v.status='failed';v.error=e.message;record(v);throw e;}
   }
-  async function generateBatch(p,items){
+  async function generateBatch(p,items,{count=4,concurrency=8}={}){
     if(!Array.isArray(items)||!items.length)throw Error('没有选择需要重做的鞋位');
-    if(items.some(x=>x.r.revisionCandidate))throw Error('所选鞋位已有候选版本，请先应用或保留');
-    const results=[];
-    for(const item of items){
-      results.push(await generate(p,item.r,item.options||{}));
-    }
-    return results;
+    if(items.some(x=>x.r.revisionCandidates&&x.r.revisionCandidates.length||x.r.revisionCandidate))throw Error('所选鞋位已有候选版本，请先应用或保留');
+    const jobs=[];for(const item of items)for(let i=0;i<count;i++)jobs.push({item,index:i});
+    const successes=new Map(),failures=[];let cursor=0;
+    async function worker(){while(cursor<jobs.length){const job=jobs[cursor++],item=job.item;try{const v=await generate(p,item.r,{...(item.options||{}),attach:false});if(!successes.has(item.r))successes.set(item.r,[]);successes.get(item.r).push(v);}catch(e){failures.push({regionId:item.r.id,index:job.index,error:e.message});}}}
+    await Promise.all(Array.from({length:Math.min(concurrency,jobs.length)},worker));
+    for(const item of items){const list=successes.get(item.r)||[];item.r.revisionCandidates=list;item.r.revisionCandidate=list[0]||null;}
+    if(!successes.size)throw Error('全部重换候选生成失败');
+    return {candidates:[...successes.values()].flat(),failures};
   }
-  function discard(r){const v=r.revisionCandidate;if(!v)return;v.status='not_selected';record(v);r.revisionCandidate=null;}
-  async function apply(p,r){
-    const v=r.revisionCandidate;if(!v||v.status!=='candidate')throw Error('没有可应用的新版本');
+  function discard(r,v){const list=r.revisionCandidates||[r.revisionCandidate].filter(Boolean),targets=v?[v]:list;for(const x of targets){x.status='not_selected';record(x);}r.revisionCandidates=v?list.filter(x=>x!==v):[];r.revisionCandidate=r.revisionCandidates[0]||null;}
+  async function apply(p,r,candidate){
+    const v=candidate||r.revisionCandidate;if(!v||v.status!=='candidate')throw Error('没有可应用的新版本');
     if(r.preview!==v.basePreview||fingerprint(r)!==v.fingerprint)throw Error('鞋位、素材或当前版本已变化，不能应用旧候选');
     const outputDir=fs.mkdtempSync(path.join(v.folder,'apply-'));
     const composition=await compose(p,r,v.preview,outputDir,v.refinedMask||v.editMask);
@@ -77,7 +79,7 @@ function createRevisions({api,vision,host,root}) {
     catch(e){v.status='candidate';v.applyError=e.message;record(v);throw e;}
     r.revisionHistory=r.revisionHistory||[];r.revisionHistory.push({preview:r.preview,composition:r.composition,written:!!r.written,replacedAt:new Date().toISOString()});
     if(v.refinedMask)r.visionMask=v.refinedMask;
-    r.preview=v.preview;r.composition=composition;r.writeResult=result;r.written=true;r.previewValidation='valid';r.phase='written';r.status='新版本已回写，待画面验收';r.revisionCandidate=null;
+    r.preview=v.preview;r.composition=composition;r.writeResult=result;r.written=true;r.previewValidation='valid';r.phase='written';r.status='新版本已回写，待画面验收';for(const other of (r.revisionCandidates||[])){if(other!==v&&other.status==='candidate'){other.status='not_selected';record(other);}}r.revisionCandidates=[];r.revisionCandidate=null;
     p.markersHidden=hideRoleMarkers;p.needsFinalize=!!p.dualRole&&!hideRoleMarkers;
     v.status='applied';v.appliedAt=new Date().toISOString();v.composition=composition;
     try{record(v);}catch(e){v.logWarning=e.message;}
