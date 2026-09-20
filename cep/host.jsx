@@ -380,8 +380,10 @@ var AI_Shoe_CEP = (function () {
     applyProductDisplaySingle:function(a){
       var parent=documentFor(a.documentId,true),original=find(parent.layers,a.layerId),history=parent.activeHistoryState,target=null,dialogs=app.displayDialogs;
       if(!original||original.kind!==LayerKind.SMARTOBJECT)throw Error('产品展示单鞋槽位已不存在');
-      var currentLabel=label(original),expected=a.role==='主推'?['orange','orangeColor']:a.role==='次推'?['yellow','yellowColor']:[];
-      if(expected.indexOf(currentLabel)<0)throw Error('产品展示单鞋的橙色/黄色标记已变化，请重新扫描');
+      var currentLabel=label(original);
+      var validLabel=a.role==='主推'?(currentLabel==='orange'||currentLabel==='orangeColor'):a.role==='次推'?(currentLabel==='yellow'||currentLabel==='yellowColor'):false;
+      // Photoshop ExtendScript does not reliably implement Array#indexOf.
+      if(!validLabel)throw Error('产品展示单鞋的橙色/黄色标记已变化，请重新扫描');
       if(!original.visible)throw Error('产品展示单鞋槽位已隐藏，请重新扫描');
       if(isVectorSmart(original))throw Error('矢量智能对象不支持直接替换');
       var file=new File(a.file);if(!file.exists)throw Error('bd_single01 素材不存在');

@@ -54,6 +54,27 @@ with tempfile.TemporaryDirectory() as folder:
     assert np.all(white[a == 0])
     assert result['outsideChangedPixels'] == 0
 
+# Transparent Photoshop canvases may store black RGB under alpha=0. That hidden
+# color must never become the AI scene, and full-scene writeback must retain the
+# original alpha instead of creating an opaque black/white rectangle.
+with tempfile.TemporaryDirectory() as folder:
+    p = Path(folder)
+    rgba = Image.new('RGBA', (40, 40), (0, 0, 0, 0))
+    rgba.paste((20, 30, 40, 255), (12, 10, 28, 30))
+    rgba.save(p / 'source.png')
+    clean = vision.opaque_scene(Image.open(p / 'source.png'))
+    clean_a = np.asarray(clean)
+    assert np.all(clean_a[0, 0] == (255, 255, 255)), 'hidden black RGB leaked into AI scene'
+    Image.new('L', (40, 40), 255).save(p / 'mask.png')
+    Image.new('RGB', (40, 40), 'red').save(p / 'generated.png')
+    region = {'box':[0,0,40,40], 'mask':str(p/'mask.png'), 'maskMode':'dino_rectangle',
+              'noMaskExpansion':True, 'generated':str(p/'generated.png'), 'output':str(p/'patch.png')}
+    vision.compose_parent({'source':str(p/'source.png'), 'output':str(p/'out.png'), 'regions':[region]})
+    restored = Image.open(p / 'out.png')
+    assert restored.mode == 'RGBA'
+    assert np.array_equal(np.asarray(restored.getchannel('A')), np.asarray(rgba.getchannel('A')))
+    assert np.all(np.asarray(restored.convert('RGB'))[15, 15] == (255, 0, 0))
+
 # Mismatched model aspect ratio remains a hard failure.
 with tempfile.TemporaryDirectory() as folder:
     p = Path(folder)
@@ -75,4 +96,4 @@ assert "transparent:false" in panel and "output,patches:null" in panel
 assert "transparent:false" in revisions and "output:composition.output,patches:null" in revisions
 assert "transparent:true" not in panel and "transparent:!!p.dualRole" not in revisions
 
-print('PASS: DINO rectangle ownership, opaque full-scene writeback, padded square context, and aspect guard')
+print('PASS: DINO rectangle ownership, opaque AI scenes, preserved source alpha, padded square context, and aspect guard')

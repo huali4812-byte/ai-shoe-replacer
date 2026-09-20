@@ -10,6 +10,13 @@ from PIL import Image, ImageFilter, ImageDraw
 from scipy import ndimage
 
 
+def opaque_scene(image, background=(255, 255, 255)):
+    """Return an RGB scene without exposing hidden RGB under transparent pixels."""
+    rgba = image.convert('RGBA')
+    base = Image.new('RGBA', rgba.size, (*background, 255))
+    return Image.alpha_composite(base, rgba).convert('RGB')
+
+
 def expanded_binary_support(mask, radius):
     """Exactly MaxFilter(2*radius+1) > 0 for an L mask, without a large kernel.
 
@@ -320,7 +327,8 @@ def corrected_mask(source, box, fallback):
 
 
 def composite(request):
-    source = Image.open(request['source']).convert('RGB')
+    source_file = Image.open(request['source'])
+    source = opaque_scene(source_file)
     region = request['region']
     mask = Image.open(region['mask']).convert('L')
     if mask.getbbox() is None:
@@ -447,7 +455,9 @@ def role_ownership(size, regions):
 
 
 def compose_parent(request):
-    original = Image.open(request['source']).convert('RGB')
+    source_file = Image.open(request['source'])
+    original = opaque_scene(source_file)
+    original_alpha = source_file.convert('RGBA').getchannel('A') if 'A' in source_file.getbands() else None
     canvas = original.copy()
     union = Image.new('L', original.size, 0)
     checks, rejected = [], []
@@ -516,10 +526,16 @@ def compose_parent(request):
         original.crop(tuple(check['box'])).save(check['reviewInput'])
         canvas.crop(tuple(check['box'])).save(check['reviewOutput'])
     if request.get('transparent'):
-        # canvas is already alpha-composited; use binary support to avoid applying
-        # a soft alpha twice when Photoshop overlays this on the same source.
+        # Legacy/manual patch mode keeps only edited support.
+        output_alpha = Image.fromarray((np.array(union) > 0).astype('uint8') * 255)
         canvas = canvas.convert('RGBA')
-        canvas.putalpha(Image.fromarray((np.array(union) > 0).astype('uint8') * 255))
+        canvas.putalpha(output_alpha)
+    elif original_alpha is not None:
+        # Full-scene writeback preserves the smart object's original transparent
+        # canvas. AI sees a white preview, while untouched alpha never becomes a
+        # hidden black/white rectangle in Photoshop.
+        canvas = canvas.convert('RGBA')
+        canvas.putalpha(original_alpha)
     canvas.save(request['output'])
     return {'output': request['output'], 'size': list(canvas.size),
             'regions': checks, 'rejected': rejected, 'outsideChangedPixels': 0,
@@ -663,7 +679,7 @@ class Vision:
 
     def detect(self, request):
         structure = request.get('sceneType') == 'shoe_structure' and not request.get('roleMarkers')
-        original = Image.open(request['source']).convert('RGB')
+        original = opaque_scene(Image.open(request['source']))
         if original.width*original.height > 80_000_000:
             raise ValueError('内部图片超过 8000 万像素，需单独处理')
         image = original.copy()
