@@ -211,12 +211,17 @@ var AI_Shoe_CEP = (function () {
       var ref=new ActionReference();ref.putIdentifier(s('layer'),l.id);var desc=executeActionGet(ref);
       if(desc.hasKey(s('smartObject'))){var so=desc.getObjectValue(s('smartObject'));if(so.hasKey(s('linked'))&&so.getBoolean(s('linked')))throw Error('链接智能对象暂不处理，避免修改外部素材');}
       var openIds={};for(var oi=0;oi<app.documents.length;oi++)openIds[app.documents[oi].id]=true;
-      parent.activeLayer=l;executeAction(s('placedLayerEditContents'),new ActionDescriptor(),DialogModes.NO);
-      var source=app.activeDocument;if(source.id===parent.id)throw Error('未打开智能对象内容');
-      if(openIds[source.id]&&!source.saved){app.activeDocument=parent;throw Error('智能对象内部有未保存的修改，已保留该文档');}
-      var sourceId=source.id;var copy=source.duplicate('AI-Shoe-content-'+a.id,false);if(!openIds[source.id])source.close(SaveOptions.DONOTSAVECHANGES);app.activeDocument=copy;
-      working[copy.id]={sourceId:sourceId};smartTasks[a.id]={doc:copy,parent:parent,layerId:l.id,parentKey:parentKey};smartTaskParents[parentKey]=smartTasks[a.id];
-      return {documentId:copy.id,width:copy.width.as('px'),height:copy.height.as('px')};
+      var dialogs=app.displayDialogs,source=null,copy=null;
+      try{
+        app.displayDialogs=DialogModes.NO;
+        parent.activeLayer=l;executeAction(s('placedLayerEditContents'),new ActionDescriptor(),DialogModes.NO);
+        source=app.activeDocument;if(source.id===parent.id)throw Error('未打开智能对象内容');
+        if(openIds[source.id]&&!source.saved){app.activeDocument=parent;throw Error('智能对象内部有未保存的修改，已保留该文档');}
+        var sourceId=source.id;copy=source.duplicate('AI-Shoe-content-'+a.id,false);if(!openIds[source.id])source.close(SaveOptions.DONOTSAVECHANGES);app.activeDocument=copy;
+        working[copy.id]={sourceId:sourceId};smartTasks[a.id]={doc:copy,parent:parent,layerId:l.id,parentKey:parentKey};smartTaskParents[parentKey]=smartTasks[a.id];
+        return {documentId:copy.id,width:copy.width.as('px'),height:copy.height.as('px')};
+      }finally{app.displayDialogs=dialogs;}
+
     },
     autoPrepareSmart:function(a){
       var parent=activatePreparedParent(a.documentId);
@@ -228,7 +233,7 @@ var AI_Shoe_CEP = (function () {
         var diag={taskId:a.id,smartLayerId:t.layerId,width:d.width.as('px'),height:d.height.as('px'),layers:items,shoeChannels:channels.length};
         var f=new File(a.diagnostic);f.encoding='UTF8';f.open('w');f.write(json(diag));f.close();
         var markers=[];
-        function collectMarkers(ls){for(var mi=0;mi<ls.length;mi++){var ml=ls[mi];if(!ml.visible)continue;if(ml.typename==='LayerSet'){collectMarkers(ml.layers);continue;}if(ml.kind===LayerKind.TEXT){var text=String(ml.textItem.contents).replace(/\s/g,'');if(/^(主推|次推)(色)?$/.test(text))markers.push({id:ml.id,role:text.indexOf('主推')===0?'主推':'次推',bounds:bounds(ml)});}}}
+        function collectMarkers(ls){for(var mi=0;mi<ls.length;mi++){var ml=ls[mi];if(ml.typename==='LayerSet'){collectMarkers(ml.layers);continue;}if(ml.kind===LayerKind.TEXT){var text=String(ml.textItem.contents).replace(/\s/g,'');if(/^(主推|次推)(色)?$/.test(text))markers.push({id:ml.id,role:text.indexOf('主推')===0?'主推':'次推',bounds:bounds(ml),wasVisible:!!ml.visible});}}}
         if(a.dualRole){collectMarkers(d.layers);var main=false,secondary=false;for(var mi=0;mi<markers.length;mi++){main=main||markers[mi].role==='主推';secondary=secondary||markers[mi].role==='次推';}if(markers.length&&(!main||!secondary))throw Error('紫色图只有一种角色文字，请补齐主推和次推，或移除全部角色文字使用随机配对');t.roleMarkers=markers;t.styleCount=markers.length;if(!markers.length&&typeof t.randomMainPair!=='number')t.randomMainPair=Math.random()<0.5?0:1;}
         // Structural callouts must be present in the immediate containing group.
         // A section name alone also matches people photographs in this template.
@@ -240,7 +245,7 @@ var AI_Shoe_CEP = (function () {
         var sceneType=!a.dualRole&&/内置加固片/.test(contextText)&&/加固后跟杯/.test(contextText)?'shoe_structure':'person';
         var sourceFile=a.contentFile.replace(/\.psb$/i,'-full.png');
         try{for(var mi=0;mi<markers.length;mi++)find(d.layers,markers[mi].id).visible=false;exportCrop(d,[0,0,d.width.as('px'),d.height.as('px')],sourceFile);}
-        finally{for(var mi=0;mi<markers.length;mi++)find(d.layers,markers[mi].id).visible=true;}
+        finally{for(var mi=0;mi<markers.length;mi++)find(d.layers,markers[mi].id).visible=markers[mi].wasVisible;}
         if(channels.length===1&&!a.dualRole){
           d.selection.load(channels[0]);var region=actions.captureSmartProtection({id:a.id,layerId:t.layerId});
           return {box:region.box,smartLayerId:t.layerId,source:'namedChannel',sourceFile:sourceFile,regions:[{box:region.box,mask:null}]};
