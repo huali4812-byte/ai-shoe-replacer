@@ -44,7 +44,7 @@ function createRevisions({api,vision,host,root}) {
         const scopeInstruction=partMask?'白色蒙版是用户精确框选范围，任何像素变化都不得超出该范围。':'当前未提供精确局部框选，白色蒙版覆盖当前整只鞋；即使整鞋可编辑，也只能修改指定的'+partName+'，鞋上其他部位必须逐像素尽量保持第一张图。';
         const localInstruction=localized?scopeInstruction+'仅修改白色蒙版内的'+partName+'；黑色区域及白色区域外的鞋型、轮廓、其他鞋体部件、人物和背景必须保持第一张图不变。'+(change==='color'?'只校正该部位颜色、材质和分色，保持原有几何结构、厚度、纹路位置及鞋型不变，禁止改变轮廓、数量、连接关系或相邻结构。':'按照对应部位参考还原结构、纹理、材质和颜色，不改变相邻部件；只处理用户选定的原因，不顺带修改其他属性。'):'将蒙版内 '+(r.shoeCount||1)+' 只鞋替换为 '+r.product.sku+' '+r.product.color+'（'+r.role+'）。';
         const prompt='第一张是当前结果局部图，第二张是同坐标黑白编辑蒙版，仅白色区域允许修改，后面只提供与本次修改对应的目标参考图。'+localInstruction+'必须保留第一张画布尺寸和1:1比例、鞋的位置、左右脚、鞋尖方向、透视、大小及遮挡。禁止把蒙版画入输出。此次重点：'+reason+'。用户要求：'+note;
-        const edit={...r,input:copies[0],visionMask:copies[1],material:{cutout:copies[2],references:copies.slice(3),referenceMetadata:Object.fromEntries(selectedReferences.map((file,i)=>[copies[i+2],r.material.referenceMetadata&&r.material.referenceMetadata[file]||plan.classify(file)])),logoReferences:selectedReferences.map((file,i)=>plan.classify(file).detail==='logo'?copies[i+2]:null).filter(Boolean)}};
+        const edit={...r,generationKind:'revision',input:copies[0],visionMask:copies[1],material:{cutout:copies[2],references:copies.slice(3),referenceMetadata:Object.fromEntries(selectedReferences.map((file,i)=>[copies[i+2],r.material.referenceMetadata&&r.material.referenceMetadata[file]||plan.classify(file)])),logoReferences:selectedReferences.map((file,i)=>plan.classify(file).detail==='logo'?copies[i+2]:null).filter(Boolean)}};
         v.status='generating';record(v);v.preview=await generation.run({api,task:edit,prompt,maskFirst:true,options:{taskId:r.id+'-'+v.id,aspectRatio:'1:1',validateAspect:true},record:log=>{v.generation=log;record(v);}});
 
       }
@@ -55,17 +55,18 @@ function createRevisions({api,vision,host,root}) {
       v.composition=await compose(p,r,v.preview,folder,v.refinedMask||v.editMask);v.status='candidate';record(v);if(attach){r.revisionCandidates=[v];r.revisionCandidate=v;}return v;
     }catch(e){v.status='failed';v.error=e.message;record(v);throw e;}
   }
-  async function generateBatch(p,items,{count=4,concurrency=8}={}){
+  async function generateGlobal(items,{count=4,concurrency=8}={}){
     if(!Array.isArray(items)||!items.length)throw Error('没有选择需要重做的鞋位');
     if(items.some(x=>x.r.revisionCandidates&&x.r.revisionCandidates.length||x.r.revisionCandidate))throw Error('所选鞋位已有候选版本，请先应用或保留');
     const jobs=[];for(const item of items)for(let i=0;i<count;i++)jobs.push({item,index:i});
     const successes=new Map(),failures=[];let cursor=0;
-    async function worker(){while(cursor<jobs.length){const job=jobs[cursor++],item=job.item;try{const v=await generate(p,item.r,{...(item.options||{}),attach:false});if(!successes.has(item.r))successes.set(item.r,[]);successes.get(item.r).push(v);}catch(e){failures.push({regionId:item.r.id,index:job.index,error:e.message});}}}
+    async function worker(){while(cursor<jobs.length){const job=jobs[cursor++],item=job.item;try{const v=await generate(item.p,item.r,{...(item.options||{}),attach:false});if(!successes.has(item.r))successes.set(item.r,[]);successes.get(item.r).push(v);}catch(e){failures.push({regionId:item.r.id,index:job.index,error:e.message});}}}
     await Promise.all(Array.from({length:Math.min(concurrency,jobs.length)},worker));
     for(const item of items){const list=successes.get(item.r)||[];item.r.revisionCandidates=list;item.r.revisionCandidate=list[0]||null;}
-    if(!successes.size)throw Error('全部重换候选生成失败');
+    if(!successes.size){const details=[...new Set(failures.map(x=>x.error))].slice(0,3).join('；');throw Error('全部重换候选生成失败'+(details?'：'+details:''));}
     return {candidates:[...successes.values()].flat(),failures};
   }
+  async function generateBatch(p,items,settings){return generateGlobal(items.map(x=>({...x,p})),settings);}
   function discard(r,v){const list=r.revisionCandidates||[r.revisionCandidate].filter(Boolean),targets=v?[v]:list;for(const x of targets){x.status='not_selected';record(x);}r.revisionCandidates=v?list.filter(x=>x!==v):[];r.revisionCandidate=r.revisionCandidates[0]||null;}
   async function apply(p,r,candidate){
     const v=candidate||r.revisionCandidate;if(!v||v.status!=='candidate')throw Error('没有可应用的新版本');
@@ -86,6 +87,6 @@ function createRevisions({api,vision,host,root}) {
     try{record(v);}catch(e){v.logWarning=e.message;}
     return v;
   }
-  return {generate,generateBatch,apply,discard};
+  return {generate,generateBatch,generateGlobal,apply,discard};
 }
 module.exports={createRevisions};

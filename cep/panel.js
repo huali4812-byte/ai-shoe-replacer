@@ -331,6 +331,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     const taskList=$('tasks'),savedTaskScroll=taskList?taskList.scrollTop:0;
     $('batch').disabled=state.busy;
     $('batch').textContent=batchStage?'正在处理…':state.busy?'请等待当前操作…':'开始批量换鞋';
+    const redoCount=[...revisionForms.values()].filter(f=>f.batchSelected).length;if($('redoSelected'))$('redoSelected').textContent='批量重换所有已勾选（'+redoCount+' 个鞋位，每个4张）';
     ['scan','working','excel','library','apiTest','save','diagnostics','bindMaterial','libraryPath','cutout','referenceFiles','materialProduct'].forEach(id=>$(id).disabled=state.busy);
     const locked=state.tasks.some(t=>t.children||t.written||t.displayRows);
     ['targetSku','scan','working','excel','library','libraryPath','bindMaterial'].forEach(id=>$(id).disabled=state.busy||locked);
@@ -558,6 +559,16 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     const failedShoeTasks=ready.filter(t=>!t.written||t.generationState==='no_result'||t.writeError||t.qualityError||(t.children&&t.children.some(r=>!r.written||r.generationState==='no_result'||r.writeError||r.qualityError))).length;
     if(documentWrites){showBatchStage('回写完成，等待另存 PSB 副本');const saved=await host('saveCopy',{documentId:state.scan.documentId});fs.writeFileSync(path.join(dir,'saved-document.json'),JSON.stringify({documentId:state.scan.documentId,document:state.scan.document,saved:saved,time:new Date().toISOString()},null,2));message('鞋位回写 '+written+' 个；产品展示本次写入 '+displayWrites+' 行、仍有 '+(pendingDisplayRows+failedShoeTasks)+' 个行/任务未完成；已写入效果待验收。'+(saved.path||'已取消保存'));} else message('本次没有成功回写；失败/待重试 '+(pendingDisplayRows+failedShoeTasks)+' 个行/任务，请查看各任务错误阶段。');
   },'正在准备批量换鞋…');
+  $('redoSelected').onclick=()=>act(async()=>{
+    const items=[];
+    for(const p of state.tasks){for(const r of (p.children||[])){const form=revisionForms.get(r.id);if(!form||!form.batchSelected)continue;if(!r.preview||!r.visionMask||!r.input)throw Error('鞋位 '+r.id+' 缺少当前结果或蒙版，不能安全重换');if(form.part!=='whole'&&!form.note.trim())throw Error('鞋位 '+r.id+' 的局部重换需要填写修改要求');items.push({p,r,form,options:{reason:form.reason,note:form.note,part:form.part==='whole'?null:form.part,change:form.change,partMask:form.partMask}});}}
+    if(!items.length)throw Error('请先在任务详情中勾选至少一个“加入批量重做”');
+    if(!window.confirm('将跨全部任务重换 '+items.length+' 个鞋位，每个生成4张候选，总并发上限8，可能产生费用。当前结果不会覆盖。是否继续？'))return;
+    message('正在批量重换全部已勾选鞋位：'+items.length+' × 4 张，并行8…');
+    const result=await revisionService().generateGlobal(items,{count:4,concurrency:8});
+    items.forEach(x=>x.form.batchSelected=false);
+    message('全局批量重换完成：成功 '+result.candidates.length+' 张'+(result.failures.length?'，失败 '+result.failures.length+' 张；成功候选已保留':'')+'。请在对应鞋位点击缩略图查看并应用。');
+  },'正在批量重换所有已勾选鞋位…');
   $('retryUnwritten').onclick=()=>act(async()=>{
     if(!state.scan)throw Error('请先扫描 PSB');
     const candidates=[];
