@@ -6,12 +6,18 @@ for(let y=20;y<80;y++)for(let x=10;x<90;x++){const i=(y*100+x)*4;image.data[i]=2
 const t=path.join(dir,'t.png'),bd=path.join(dir,'bd.png');fs.writeFileSync(t,PNG.sync.write(image));image.data.forEach((v,i)=>{if(i%4===3)image.data[i]=255;});fs.writeFileSync(bd,PNG.sync.write(image));
 const product={id:'p',sku:'GW2003',color:'亮银/矿石灰/陨石灰'},entries=[];
 for(const view of ['pair','back','sole'])for(const kind of ['bd','t'])entries.push({view,kind,color:'亮银-矿石灰-陨石灰',file:kind==='t'?t:bd});
+entries.push({view:'single01',kind:'bd',color:'亮银-矿石灰-陨石灰',file:bd});
 const row={id:1,color:product.color,slots:['pair','back','sole'].map((view,i)=>({id:i+2,view,targetBox:[0,0,40,30]}))};
 const plan=svc.makePlan(row,product,entries);assert.equal(plan.slots.length,3);assert.deepEqual(plan.slots[0].fraction,[.1,.2,.9,.8]);svc.verifyPlan(plan);
 assert.equal(svc.productsForRow([product],product.sku,row).length,1);
 assert.equal(svc.productsForRow([product],product.sku,{color:'亮银/矿石灰/另一色'}).length,1);
-assert.throws(()=>svc.makePlan(row,product,entries.slice(1)),/必须唯一/);
+assert.throws(()=>svc.makePlan(row,product,entries.filter(e=>!(e.view==='pair'&&e.kind==='bd'))),/必须唯一/);
 assert.throws(()=>svc.makePlan(row,product,[...entries,entries[0]]),/必须唯一/);
+const singleTask={taskType:'product_display_single',layerId:81,role:'主推'};
+const singlePlan=svc.makeSinglePlan(singleTask,product,entries);assert.equal(singlePlan.layerId,81);assert.equal(singlePlan.file,bd);svc.verifySinglePlan(singlePlan);
+assert.throws(()=>svc.makeSinglePlan(singleTask,product,entries.filter(e=>e.view!=='single01')),/bd_single01 素材必须唯一/);
+assert.throws(()=>svc.makeSinglePlan(singleTask,product,[...entries,entries.find(e=>e.view==='single01')]),/实际 2/);
+assert.throws(()=>svc.makeSinglePlan({...singleTask,role:'产品展示'},product,entries),/任务无效/);
 assert.throws(()=>svc.makePlan({...row,slots:[{view:'pair',targetBox:[0,0,1000,1000]}]},product,entries),/像素不足/);
 assert.throws(()=>svc.makePlan(row,null,entries),/颜色未明确/);
 const host=fs.readFileSync(path.join(__dirname,'../cep/host.jsx'),'utf8');new vm.Script(host.replace(/^#target.*$/mg,''));
@@ -27,6 +33,11 @@ group.layers.pop();assert.match(inspect({}).rows[0].error,/缺少对应范围框
 assert.throws(()=>svc.makePlan({...row,slots:[row.slots[0],row.slots[0],row.slots[2]]},product,entries),/重复/);
 assert.throws(()=>svc.makePlan({...row,slots:row.slots.map(s=>({...s,fitMode:'missing_frame'}))},product,entries),/不能回退到整画布/);
 fs.appendFileSync(t,'changed');assert.throws(()=>svc.verifyPlan(plan),/发生变化/);
-console.log('PASS: strict colors, complete unique views, alpha geometry, resolution, stale files, internal row inspection and restoration');
+assert.match(host,/taskType:displaySingle\?'product_display_single'/);
+assert.match(host,/applyProductDisplaySingle:function/);
+assert.match(host,/displaySingleContainer = productDisplay \|\| \/6G\/i/);
+assert.match(host,/color==='orange'.*color==='yellow'/);
+assert.match(host,/displayAsset:displaySingle\?'bd_single01'/);
+console.log('PASS: strict colors, complete unique views, optional orange-yellow bd_single01 slot, alpha geometry, resolution, stale files, internal row inspection and restoration');
 
 fs.rmSync(dir,{recursive:true,force:true});

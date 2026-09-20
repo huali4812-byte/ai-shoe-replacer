@@ -17,7 +17,7 @@ async function loadMaterials(root,sku){
   for(const v of variants){const found=await flow.eagleSearch(v);if(!Array.isArray(found)||found.length>=200)throw Error('Eagle 查询不完整，不能确认素材唯一性');for(const item of found)if(!item.isDeleted)items.set(item.id,item);}
   const entries=[];
   for(const i of items.values()){
-    const m=String(i.name).match(/^([^_]+)_(.+)_(bd|t)_(pair|back|sole)$/i);
+    const m=String(i.name).match(/^([^_]+)_(.+)_(bd|t)_(pair|back|sole|single01)$/i);
     if(!m||!variants.some(v=>v.toLowerCase()===m[1].toLowerCase()))continue;
     if(!/^[a-zA-Z0-9_-]+$/.test(i.id)||/[\\/]/.test(i.name)||!/^(png|jpg|jpeg)$/i.test(i.ext))continue;
     entries.push({color:m[2],kind:m[3].toLowerCase(),view:m[4].toLowerCase(),file:path.join(root,'images',i.id+'.info',i.name+'.'+i.ext)});
@@ -72,6 +72,18 @@ function makePlan(row,product,entries){
   return {rowId:row.id,color:row.color,product,slots};
 }
 function verifyPlan(plan){for(const s of plan.slots){if(s.sourceEvidence){const e=s.sourceEvidence;if(flow.fingerprint(e.photo)!==e.photoHash||flow.fingerprint(e.transparent)!==e.alphaHash)throw Error('旧款定位素材发生变化，请重新读取');}if(flow.fingerprint(s.file)!==s.sha256||flow.fingerprint(s.alphaFile)!==s.alphaSha256)throw Error('素材在匹配后发生变化，请重新读取');}}
+function makeSinglePlan(task,product,entries){
+  if(!product)throw Error('产品展示单鞋缺少唯一目标款色');
+  if(!task||task.taskType!=='product_display_single'||!['主推','次推'].includes(task.role))throw Error('产品展示单鞋任务无效');
+  const hits=entries.filter(e=>e.kind==='bd'&&e.view==='single01'&&colorKey(e.color)===colorKey(product.color));
+  if(hits.length!==1)throw Error(product.color+' bd_single01 素材必须唯一，实际 '+hits.length);
+  const file=referenceCache.snapshot(hits[0].file);
+  const size=flow.imageDimensions(file);
+  return {layerId:task.layerId,role:task.role,product,file,sha256:flow.fingerprint(file),sourceSize:[size.width,size.height]};
+}
+function verifySinglePlan(plan){
+  if(!plan||!plan.file||!plan.sha256||flow.fingerprint(plan.file)!==plan.sha256)throw Error('bd_single01 素材在匹配后发生变化，请重新读取');
+}
 // Native resizing happens before JS decoding; full-resolution Eagle JPEGs can
 // exceed jpeg-js's allocation limit even when the eventual AI input is small.
 async function prepareAIPlan(row,product,entries,folder){
@@ -97,4 +109,4 @@ async function prepareAIPlan(row,product,entries,folder){
   }
   return {rowId:row.id,product,slots};
 }
-module.exports={resolveSubjectFrames,outputFingerprint:flow.fingerprint,VIEWS,colorKey,productsForRow,loadMaterials,makePlan,verifyPlan,prepareAIPlan};
+module.exports={resolveSubjectFrames,outputFingerprint:flow.fingerprint,VIEWS,colorKey,productsForRow,loadMaterials,makePlan,verifyPlan,makeSinglePlan,verifySinglePlan,prepareAIPlan};

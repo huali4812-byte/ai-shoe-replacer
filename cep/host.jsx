@@ -79,6 +79,7 @@ var AI_Shoe_CEP = (function () {
       for (var i = 0; i < list.length; i++) {
         var l = list[i], name = parent + '/' + l.name, color = '', role = '', reason = '', b = null;
         var productDisplay = /产品展示/.test(String(l.name)) || /产品展示/.test(String(parent));
+        var displaySingleContainer = productDisplay || /6G/i.test(String(l.name)) || /6G/i.test(String(parent));
         var isGenerated = generated || l.name.indexOf('[AI-Shoe]') === 0 || l.name.indexOf('[换鞋测试]') === 0;
         var effectiveVisible = visible && l.visible;
         var vectorLayer=isVectorSmart(l);
@@ -103,10 +104,13 @@ var AI_Shoe_CEP = (function () {
           else if (l.kind !== LayerKind.NORMAL && l.kind !== LayerKind.SMARTOBJECT) reason = '非像素层或智能对象';
           else {
             var displayCandidate=productDisplay;
-            if(displayCandidate)role='产品展示';
+            // The optional display shoe must itself carry an orange/yellow label.
+            // Do not inherit a parent group's color or guess from pixels/content.
+            var displaySingle=displaySingleContainer&&(color==='orange'||color==='orangeColor'||color==='yellow'||color==='yellowColor');
+            if(displayCandidate&&!displaySingle)role='产品展示';
             if(!role)reason='无可用红绿橙黄洋红紫标记';
             else if(b[2]<=b[0]||b[3]<=b[1])reason='空区域';
-          else report.tasks.push({documentId:d.id,layerId:l.id,name:name,role:role,bounds:b,slots:role==='双鞋'?null:1,taskType:displayCandidate?'product_display':'shoe',displayEvidence:productDisplay?'named':'bottom_pending_structure',multiStyle:true});
+          else report.tasks.push({documentId:d.id,layerId:l.id,name:name,role:role,bounds:b,slots:role==='双鞋'?null:1,taskType:displaySingle?'product_display_single':displayCandidate?'product_display':'shoe',displayEvidence:productDisplay?'product_display_path':displaySingle?'6g_path':'bottom_pending_structure',displayAsset:displaySingle?'bd_single01':null,multiStyle:true});
           }
         }
         var kindName = l.typename === 'LayerSet' ? 'GROUP' : l.kind === LayerKind.SMARTOBJECT ? 'SMARTOBJECT' : (l.kind === LayerKind.NORMAL ? 'NORMAL' : String(l.kind));
@@ -371,6 +375,27 @@ var AI_Shoe_CEP = (function () {
         if(recovery.length)t.recoveryBlocked=true;
         throw Error('产品展示 '+stage+'：'+e.message+(recovery.length?'；任务锁定；'+recovery.join('；'):''));
       }finally{app.displayDialogs=dialogs;app.activeDocument=parent;}
+    },
+    applyProductDisplaySingle:function(a){
+      var parent=documentFor(a.documentId,true),original=find(parent.layers,a.layerId),history=parent.activeHistoryState,target=null,dialogs=app.displayDialogs;
+      if(!original||original.kind!==LayerKind.SMARTOBJECT)throw Error('产品展示单鞋槽位已不存在');
+      var currentLabel=label(original),expected=a.role==='主推'?['orange','orangeColor']:a.role==='次推'?['yellow','yellowColor']:[];
+      if(expected.indexOf(currentLabel)<0)throw Error('产品展示单鞋的橙色/黄色标记已变化，请重新扫描');
+      if(!original.visible)throw Error('产品展示单鞋槽位已隐藏，请重新扫描');
+      if(isVectorSmart(original))throw Error('矢量智能对象不支持直接替换');
+      var file=new File(a.file);if(!file.exists)throw Error('bd_single01 素材不存在');
+      try{
+        app.displayDialogs=DialogModes.NO;parent.activeLayer=original;var originalBounds=bounds(original);
+        var ref=new ActionReference();ref.putIdentifier(s('layer'),original.id);var ld=executeActionGet(ref);
+        if(ld.hasKey(s('smartObject'))){var so=ld.getObjectValue(s('smartObject'));if(so.hasKey(s('linked'))&&so.getBoolean(s('linked')))throw Error('链接智能对象不自动替换');}
+        executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);target=parent.activeLayer;
+        if(target.id===original.id||target.kind!==LayerKind.SMARTOBJECT)throw Error('未创建独立产品展示单鞋实例');
+        var replacement=new ActionDescriptor();replacement.putPath(c('null'),file);executeAction(s('placedLayerReplaceContents'),replacement,DialogModes.NO);
+        if(!sameBox(bounds(target),originalBounds,0.5))throw Error('bd_single01 替换后图层边界发生变化，已停止避免错位');
+        target.name='[AI-Shoe] 产品展示单鞋 '+a.role+' '+a.product.sku+' '+a.product.color;target.visible=true;original.visible=false;
+        return {layerId:target.id,originalLayerId:original.id,asset:'bd_single01',scope:'existing_smart_object_transform'};
+      }catch(e){try{app.activeDocument=parent;parent.activeHistoryState=history;}catch(rollbackError){throw Error(e.message+'；回滚失败：'+rollbackError.message);}throw e;}
+      finally{app.displayDialogs=dialogs;app.activeDocument=parent;}
     },
     applyProductDisplayRow:function(a){
       var parent=documentFor(a.documentId,true),t=smartTask(a.id);

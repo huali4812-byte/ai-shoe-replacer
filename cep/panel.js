@@ -165,13 +165,14 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     state.tasks=[];
     state.scan.tasks.forEach(candidate=>{for(let slot=0;slot<1;slot++){
       const isDisplay=candidate.taskType==='product_display';
+      const isDisplaySingle=candidate.taskType==='product_display_single';
       const targetRole=({单鞋主推:'主推',单鞋次推:'次推',鞋底:'主推'})[candidate.role]||candidate.role;
       const options=isDisplay?[]:state.products.filter(p=>p.sku.trim()===state.targetSku&&p.role===targetRole);
       const dualRole=candidate.role==='双鞋';
       const generationKind=({单鞋主推:'single_main',单鞋次推:'single_secondary',鞋底:'sole'})[candidate.role]||(dualRole?'pair':'auto');
       const roleProducts={};for(const role of ['主推','次推']){const found=state.products.filter(p=>p.sku.trim()===state.targetSku&&p.role===role);if(found.length===1)roleProducts[role]=found[0];}
       const product= isDisplay?null : dualRole?(roleProducts['主推']&&roleProducts['次推']?roleProducts['主推']:null):(options.length===1?options[0]:null);
-      const status=isDisplay?'产品展示：待进入智能对象读取展示行':product?'待素材匹配':candidate.role==='双鞋'?'已跳过：紫色图需要唯一主推和次推款色':options.length>1?'已跳过：Excel 同款同角色存在多个颜色':'已跳过：未选择新货号或所选货号缺少该角色款色';
+      const status=isDisplay?'产品展示：待进入智能对象读取展示行':isDisplaySingle?(product?'产品展示单鞋：待匹配唯一 bd_single01':'已跳过：产品展示单鞋缺少唯一目标角色款色'):product?'待素材匹配':candidate.role==='双鞋'?'已跳过：紫色图需要唯一主推和次推款色':options.length>1?'已跳过：Excel 同款同角色存在多个颜色':'已跳过：未选择新货号或所选货号缺少该角色款色';
       state.tasks.push({...candidate,role:targetRole,markerRole:candidate.role,generationKind,dualRole,roleProducts,id:Date.now()+'-'+candidate.layerId+'-'+slot,slot:slot+1,product,confirmed:false,status});
     }});
     matchAll();
@@ -211,6 +212,15 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     });
     t.displayMaterials=materials;
     t.status='展示行已读取；颜色不匹配的行请选择目标款色';render();
+  }
+  async function applyDisplaySingle(t){
+    if(!state.targetSku)throw Error('请先选择新货号');
+    if(!t.product)throw Error('产品展示单鞋没有唯一目标款色');
+    const svc=displayService(),entries=await svc.loadMaterials($('libraryPath').value.trim(),state.targetSku);
+    const plan=svc.makeSinglePlan(t,t.product,entries);svc.verifySinglePlan(plan);
+    const result=await host('applyProductDisplaySingle',{documentId:t.documentId,layerId:t.layerId,role:t.role,product:t.product,file:plan.file});
+    t.displaySinglePlan=plan;t.writeResult=result;t.written=true;t.status='bd_single01 已直接替换，待画面验收';
+    return 1;
   }
   async function applyDisplay(t,dir){
     if(!t.displayRows||!t.displayMaterials)await prepareDisplay(t);
@@ -306,7 +316,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     try{fs.writeFileSync(path.join(dir,t.id+'-product-display-ai.json'),JSON.stringify(t,null,2));}catch(e){recordFailure(e,'report_write',t);t.status+='；记录保存失败：'+e.message;}
     return writes;
   }
-  function matchAll(){state.tasks.forEach(t=>{if(t.region)return;t.material=null;if(!t.product)return;try{t.material=flow.matchMaterial(state.materials,t.product);if(t.dualRole){t.roleMaterials={};for(const role of ['主推','次推'])t.roleMaterials[role]=flow.matchMaterial(state.materials,t.roleProducts[role]);}t.status=t.dualRole?'按内部标注分配；无标注时随机分配两双':'待处理';}catch(e){failureLog.event('task_blocked',{taskId:t.id,stage:'material_binding',message:e.message});t.material=null;t.status='已跳过：'+e.message;}});}
+  function matchAll(){state.tasks.forEach(t=>{if(t.region)return;t.material=null;if(t.taskType==='product_display_single')return;if(!t.product)return;try{t.material=flow.matchMaterial(state.materials,t.product);if(t.dualRole){t.roleMaterials={};for(const role of ['主推','次推'])t.roleMaterials[role]=flow.matchMaterial(state.materials,t.roleProducts[role]);}t.status=t.dualRole?'按内部标注分配；无标注时随机分配两双':'待处理';}catch(e){failureLog.event('task_blocked',{taskId:t.id,stage:'material_binding',message:e.message});t.material=null;t.status='已跳过：'+e.message;}});}
   function render(){
     const taskList=$('tasks'),savedTaskScroll=taskList?taskList.scrollTop:0;
     $('batch').disabled=state.busy;
@@ -331,6 +341,12 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
       const pathSummary=document.createElement('summary');pathSummary.textContent='完整图层路径';pathDetails.appendChild(pathSummary);
       const pathText=document.createElement('div');pathText.textContent=fullName;pathDetails.appendChild(pathText);
       pathDetails.ontoggle=()=>{if(pathDetails.open)expandedTaskPaths.add(t.id);else expandedTaskPaths.delete(t.id);};row.appendChild(pathDetails);
+      if(t.taskType==='product_display_single'){
+        const info=document.createElement('p');info.textContent=t.status;row.appendChild(info);
+        const target=document.createElement('p');target.textContent=t.product?'目标：'+t.product.sku+' | '+t.product.color+' | '+t.role:'目标：无唯一对应款色';row.appendChild(target);
+        row.appendChild(button('使用 bd_single01 替换展示单鞋',async()=>{await applyDisplaySingle(t);render();message(t.status+'。请另存 PSB 副本。');},!state.scan.working||!t.product||t.written));
+        $('tasks').appendChild(row);return;
+      }
       if(t.taskType==='product_display'){
         const info=document.createElement('p');info.textContent=t.status;row.appendChild(info);
         row.appendChild(button('读取展示行与素材',async()=>{await prepareDisplay(t);message(t.status);},!state.scan.working||t.written));
@@ -413,9 +429,10 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
   $('batch').onclick=()=>act(async()=>{
     if(!state.scan)throw Error('请先扫描 PSB 标记');
     if(!state.scan.working){state.scan=await host('createWorking');rebuild();}
-    const ready=state.tasks.filter(t=>t.material&&t.product&&!t.written);
+    const ready=state.tasks.filter(t=>t.taskType!=='product_display_single'&&t.material&&t.product&&!t.written);
     const displays=state.tasks.filter(t=>t.taskType==='product_display'&&!t.written);
-    if(!ready.length&&!displays.length)throw Error('没有待处理的已匹配任务');
+    const displaySingles=state.tasks.filter(t=>t.taskType==='product_display_single'&&t.product&&!t.written);
+    if(!ready.length&&!displays.length&&!displaySingles.length)throw Error('没有待处理的已匹配任务');
     // Window layout is optional; failure must not discard prepared or paid results.
     let comparison;
     try{comparison=await host('arrangeComparison',{documentId:state.scan.documentId});}
@@ -424,6 +441,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     const dir=path.join(os.homedir(),'Pictures','AI-Shoe-Preview',String(Date.now()));fs.mkdirSync(dir,{recursive:true});
     let displayWrites=0;
     for(const t of displays){try{displayWrites+=await applyDisplay(t,dir);}catch(e){recordFailure(e,'product_display',t);t.status='产品展示素材替换失败：'+e.message;}render();}
+    for(const t of displaySingles){try{displayWrites+=await applyDisplaySingle(t);}catch(e){recordFailure(e,'product_display_single',t);t.status='产品展示单鞋待确认：'+e.message;}render();}
     fs.mkdirSync(VISION_FOLDER,{recursive:true});
     const blockedGeneration=new Set();
     async function prepareParent(t){
@@ -525,8 +543,8 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     const detectedShoes=exported.reduce((n,t)=>n+(Number(t.shoeCount)||0),0);
     const writtenShoes=exported.filter(t=>t.written).reduce((n,t)=>n+(Number(t.shoeCount)||0),0);
     const skippedCandidates=ready.reduce((n,t)=>n+((t.detectionWarnings||[]).length),0);
-    fs.writeFileSync(path.join(dir,'report.json'),JSON.stringify({summary:{parentTasks:ready.length,regions:exported.length,detectedShoes,writtenRegions:written,writtenShoes,skippedCandidates,displayWrittenRows:displayWrites},tasks:ready,productDisplays:displays,regions:exported},null,2));
-    const pendingDisplayRows=displays.reduce((n,t)=>n+(t.displayRows?t.displayRows.filter(r=>!r.written).length:1),0);
+    fs.writeFileSync(path.join(dir,'report.json'),JSON.stringify({summary:{parentTasks:ready.length,regions:exported.length,detectedShoes,writtenRegions:written,writtenShoes,skippedCandidates,displayWrittenRows:displayWrites},tasks:ready,productDisplays:displays,productDisplaySingles:displaySingles,regions:exported},null,2));
+    const pendingDisplayRows=displays.reduce((n,t)=>n+(t.displayRows?t.displayRows.filter(r=>!r.written).length:1),0)+displaySingles.filter(t=>!t.written).length;
     const failedShoeTasks=ready.filter(t=>!t.written||t.generationState==='no_result'||t.writeError||t.qualityError||(t.children&&t.children.some(r=>!r.written||r.generationState==='no_result'||r.writeError||r.qualityError))).length;
     if(documentWrites){showBatchStage('回写完成，等待另存 PSB 副本');const saved=await host('saveCopy',{documentId:state.scan.documentId});fs.writeFileSync(path.join(dir,'saved-document.json'),JSON.stringify({documentId:state.scan.documentId,document:state.scan.document,saved:saved,time:new Date().toISOString()},null,2));message('鞋位回写 '+written+' 个；产品展示本次写入 '+displayWrites+' 行、仍有 '+(pendingDisplayRows+failedShoeTasks)+' 个行/任务未完成；已写入效果待验收。'+(saved.path||'已取消保存'));} else message('本次没有成功回写；失败/待重试 '+(pendingDisplayRows+failedShoeTasks)+' 个行/任务，请查看各任务错误阶段。');
   },'正在准备批量换鞋…');
@@ -534,7 +552,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     if(!state.scan)throw Error('请先扫描 PSB');
     const candidates=[];
     for(const parent of state.tasks){
-      if(parent.taskType==='product_display'||parent.written)continue;
+      if(parent.taskType==='product_display'||parent.taskType==='product_display_single'||parent.written)continue;
       const regions=parent.children||[parent];
       for(const r of regions){
         // Missing result / explicit generation failure is safe to regenerate.
