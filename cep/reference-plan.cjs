@@ -3,8 +3,8 @@ const fs=require('fs'),path=require('path'),crypto=require('crypto');
 // Filename evidence is catalog metadata, never an inferred camera pose.
 function classify(file){
  const name=path.basename(file,path.extname(file)).toLowerCase();
- const catalog=name.match(/_t_(back|side|heel)$/);
- if(catalog)return {view:{back:'inner',side:'outer',heel:'back'}[catalog[1]],detail:catalog[1]==='heel'?'heel':'overall',evidence:'user_catalog_convention'};
+ const catalog=name.match(/_t_(back|side|heel|single02)$/);
+ if(catalog)return {view:{back:'inner',side:'outer',heel:'back',single02:'inner'}[catalog[1]],detail:catalog[1]==='heel'?'heel':'overall',catalogSlot:catalog[1]==='single02'?'single02':undefined,evidence:'user_catalog_convention'};
  const tokens=name.split(/[_\s.-]+/);
  const has=(words)=>words.some(w=>tokens.includes(w));
  const text=name.replace(/[\\-_]+/g,' ');
@@ -37,7 +37,8 @@ function classify(file){
    has(['heel','back'])||/后跟|鞋口/.test(text)?'heel':
    'overall';
  
- return {view,detail,evidence:'filename'};
+ const catalogSlot=/合成图/.test(text)?'composite':has(['pair'])&&has(['bd'])?'pair':undefined;
+ return {view,detail,catalogSlot,evidence:'filename'};
 }
 function plan(material,{view='unknown',detail='overall'}={}){
  const files=[...new Set([material.cutout,...(material.references||[])].filter(Boolean))];
