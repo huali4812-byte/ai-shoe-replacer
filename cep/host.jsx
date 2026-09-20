@@ -257,6 +257,7 @@ var AI_Shoe_CEP = (function () {
       }finally{app.activeDocument=parent;}
     },
     inspectProductDisplay:function(a){
+      if(a.taskType==='product_display_single'||a.displayAsset==='bd_single01'||a.displayEvidence==='6g_path')throw Error('该图层是产品展示单鞋槽位，不能按三视角展示行读取；请重新扫描后使用 bd_single01 直接替换');
       var parent=documentFor(a.documentId,true);
       try{
         var candidate=find(parent.layers,a.layerId),t,d,rows=[];

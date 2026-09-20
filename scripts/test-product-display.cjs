@@ -28,6 +28,7 @@ const parent={id:20},task={doc:{id:21,layers:[group],width:{as:()=>100},height:{
 const ctx={find:()=>null,documentFor:()=>parent,actions:{openSmartTask(){}},smartTask:()=>task,app:{},LayerKind:{SMARTOBJECT:'smart',TEXT:'text'},bounds:l=>l.bounds};
 const inspect=vm.runInNewContext('('+inspectText+')',ctx);
 let r=inspect({});assert.equal(r.rows.length,1);assert.equal(r.rows[0].error,'');assert.equal(r.rows[0].slots[0].view,'pair');assert.equal(ctx.app.activeDocument,parent);
+assert.throws(()=>inspect({taskType:'product_display',displayEvidence:'6g_path',displayAsset:'bd_single01'}),/产品展示单鞋槽位.*bd_single01/);
 group.layers.push({...group.layers[0],id:88});assert.match(inspect({}).rows[0].error,/颜色标题必须唯一/);group.layers.pop();
 group.layers.pop();assert.match(inspect({}).rows[0].error,/缺少对应范围框/);
 assert.throws(()=>svc.makePlan({...row,slots:[row.slots[0],row.slots[0],row.slots[2]]},product,entries),/重复/);
@@ -38,6 +39,12 @@ assert.match(host,/applyProductDisplaySingle:function/);
 assert.match(host,/displaySingleContainer = productDisplay \|\| \/6G\/i/);
 assert.match(host,/color==='orange'.*color==='yellow'/);
 assert.match(host,/displayAsset:displaySingle\?'bd_single01'/);
-console.log('PASS: strict colors, complete unique views, optional orange-yellow bd_single01 slot, alpha geometry, resolution, stale files, internal row inspection and restoration');
+const panel=fs.readFileSync(path.join(__dirname,'../cep/panel.js'),'utf8');
+const normalizeText=panel.slice(panel.indexOf('function normalizeDisplayCandidate'),panel.indexOf('\n  function rebuild'));
+const normalize=vm.runInNewContext('('+normalizeText+')');
+const staleSingle={taskType:'product_display',role:'单鞋次推',displayEvidence:'6g_path',displayAsset:'bd_single01'};
+assert.equal(normalize(staleSingle).taskType,'product_display_single');
+assert.equal(normalize({taskType:'product_display',role:'产品展示',displayEvidence:'product_display_path'}).taskType,'product_display');
+console.log('PASS: strict colors, complete unique views, optional orange-yellow bd_single01 slot, stale-task normalization, alpha geometry, resolution, stale files, internal row inspection and restoration');
 
 fs.rmSync(dir,{recursive:true,force:true});

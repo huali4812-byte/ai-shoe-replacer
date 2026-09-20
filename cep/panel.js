@@ -160,10 +160,20 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     t.needsFinalize=!!t.dualRole&&!t.detectionWarnings.length;t.written=false;updateParent(t);
     message('本地复检完成；保留已有预览，新增 '+additions.length+' 个区域；仍待复核 '+t.detectionWarnings.length+' 个候选。');
   }
+  function normalizeDisplayCandidate(candidate){
+    const markerRole=candidate.markerRole||candidate.role;
+    const hasSingleRole=markerRole==='单鞋主推'||markerRole==='单鞋次推';
+    const hasSingleEvidence=candidate.displayAsset==='bd_single01'||candidate.displayEvidence==='6g_path';
+    // A stale CEP scan may contain new single-slot evidence but an old
+    // product_display task type. Never route that contradictory object into
+    // three-view row inspection.
+    return hasSingleRole&&hasSingleEvidence?{...candidate,taskType:'product_display_single'}:candidate;
+  }
   function rebuild(){
     if(!state.scan)return;
     state.tasks=[];
-    state.scan.tasks.forEach(candidate=>{for(let slot=0;slot<1;slot++){
+    state.scan.tasks.forEach(rawCandidate=>{for(let slot=0;slot<1;slot++){
+      const candidate=normalizeDisplayCandidate(rawCandidate);
       const isDisplay=candidate.taskType==='product_display';
       const isDisplaySingle=candidate.taskType==='product_display_single';
       const targetRole=({单鞋主推:'主推',单鞋次推:'次推',鞋底:'主推'})[candidate.role]||candidate.role;
