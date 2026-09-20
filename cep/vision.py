@@ -370,27 +370,33 @@ def composite(request):
     # generated border is white, remove disconnected non-background artifacts
     # from the patch alpha. This is cleanup only; it never rejects writeback.
     patch_mask = np.array(expanded_mask) > 0
-    try:
-        rgb = np.asarray(generated)
-        border = np.concatenate([rgb[0], rgb[-1], rgb[:, 0], rgb[:, -1]])
-        if float(np.mean(np.min(border, axis=1) >= 245)) >= .9:
-            foreground = np.min(rgb, axis=2) < 238
-            labels, count = ndimage.label(foreground)
-            if count:
-                sizes = np.bincount(labels.ravel()); sizes[0] = 0
-                main = labels == int(np.argmax(sizes))
-                # Recover antialiased shoe edges, but not isolated line noise.
-                main = ndimage.binary_dilation(main, iterations=2)
-                patch_mask &= main
-    except Exception:
-        pass
+    if region.get('maskMode') != 'dino_rectangle':
+        try:
+            rgb = np.asarray(generated)
+            border = np.concatenate([rgb[0], rgb[-1], rgb[:, 0], rgb[:, -1]])
+            if float(np.mean(np.min(border, axis=1) >= 245)) >= .9:
+                foreground = np.min(rgb, axis=2) < 238
+                labels, count = ndimage.label(foreground)
+                if count:
+                    sizes = np.bincount(labels.ravel()); sizes[0] = 0
+                    main = labels == int(np.argmax(sizes))
+                    # Recover antialiased shoe edges, but not isolated line noise.
+                    main = ndimage.binary_dilation(main, iterations=2)
+                    patch_mask &= main
+        except Exception:
+            pass
     patch_alpha = Image.fromarray((patch_mask.astype('uint8') * 255), mode='L')
-    patch = generated.convert('RGBA')
-    patch.putalpha(patch_alpha)
-    patch.save(request['output'])
     original = source.crop(box)
-    combined = Image.composite(generated, original, expanded_mask)
-    before, after, alpha = np.array(original), np.array(combined), np.array(expanded_mask)
+    combined = Image.composite(generated, original, patch_alpha)
+    if region.get('maskMode') == 'dino_rectangle':
+        # DINO ownership is enforced during composition, but its artifact is an
+        # opaque scene crop. Never turn a rectangular edit into an alpha cutout.
+        combined.save(request['output'])
+    else:
+        patch = generated.convert('RGBA')
+        patch.putalpha(patch_alpha)
+        patch.save(request['output'])
+    before, after, alpha = np.array(original), np.array(combined), np.array(patch_alpha)
     outside = int(np.count_nonzero(np.any(before != after, axis=2) & (alpha == 0)))
     if outside:
         raise ValueError('区域外像素校验失败')
@@ -471,12 +477,20 @@ def compose_parent(request):
             rejected.append({'id': region.get('id'), 'error': str(exc)})
             continue
         check.update(id=region.get('id'), role=region.get('role'))
-        patch = Image.open(patch_path).convert('RGBA')
+        patch = Image.open(patch_path)
         xy = tuple(region['box'][:2])
-        canvas.paste(patch.convert('RGB'), xy, patch.getchannel('A'))
-        # Union is max(alpha), not alpha composited over alpha.
+        if region.get('maskMode') == 'dino_rectangle':
+            # The local file is an opaque scene crop. The rectangle mask is used
+            # only in memory to merge pixels into the full original canvas.
+            support = Image.open(region['mask']).convert('L')
+            canvas.paste(patch.convert('RGB'), xy, support)
+        else:
+            patch = patch.convert('RGBA')
+            support = patch.getchannel('A')
+            canvas.paste(patch.convert('RGB'), xy, support)
+        # Union is max(support), not alpha composited over alpha.
         full_alpha = Image.new('L', original.size, 0)
-        full_alpha.paste(patch.getchannel('A'), xy)
+        full_alpha.paste(support, xy)
         union = Image.fromarray(np.maximum(np.array(union), np.array(full_alpha)))
         checks.append(check)
     if not checks:

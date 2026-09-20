@@ -522,7 +522,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         }
         if(complete.every(x=>x.visionMask)){
           if(all.some(x=>x.protection.sourceFile!==t.protection.sourceFile))throw Error('同一智能对象的原始画布不一致');
-          composed=await vision.request({action:'compose_parent',source:t.protection.sourceFile,output:path.join(dir,t.id+'-full-composite.png'),allowPartial:true,requireRoles:!!t.dualRole,transparent:true,
+          composed=await vision.request({action:'compose_parent',source:t.protection.sourceFile,output:path.join(dir,t.id+'-full-composite.png'),allowPartial:true,requireRoles:!!t.dualRole,transparent:false,
             // Visible labels stay protected on partial writes; a complete validated
             // transaction hides the separate layers in applySmart with rollback.
             finalizeRoleMarkers:!!t.dualRole&&complete.length===all.length&&!hasUnreviewedCandidates(parent),
@@ -543,7 +543,9 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         // Semantic JSON review is disabled; pixel/composition protections remain.
         for(const r of complete){r.qualityError=null;r.qualityFailureStage=null;r.semanticReview='not_performed';}
         const hideRoleMarkers=!!t.dualRole&&complete.length===all.length&&!hasUnreviewedCandidates(parent);
-        const result=await host('applySmart',{id:complete[0].id,documentId:t.documentId,layerId:t.layerId,output,patches:t.dualRole&&composed?composed.regions.map(p=>{const r=complete.find(x=>x.id===p.id);return {output:p.output,box:p.box,name:'[AI换鞋] '+r.role+' · '+r.product.sku+' · '+r.product.color+' · 区域'+r.slot};}):null,contentFile:path.join(dir,t.id+'-'+Date.now()+'-content.psb'),hideRoleMarkers,fullCanvas:!!composed,canvasSize:composed&&composed.size,name:'[AI-Shoe] '+t.product.sku+' '+t.product.color});
+        // Photoshop receives one opaque, full-size scene. DINO rectangles are
+        // local pixel-ownership guards only; never materialize them as transparent patches.
+        const result=await host('applySmart',{id:complete[0].id,documentId:t.documentId,layerId:t.layerId,output,patches:null,contentFile:path.join(dir,t.id+'-'+Date.now()+'-content.psb'),hideRoleMarkers,fullCanvas:!!composed,canvasSize:composed&&composed.size,name:'[AI-Shoe] '+t.product.sku+' '+t.product.color});
         documentWrites++;
         for(const x of complete.filter(x=>!x.written)){x.writeResult=result;x.composition=composed;x.written=true;x.phase='written';x.status='已回写，待画面验收';written++;}
         if(parent){parent.markersHidden=hideRoleMarkers;parent.needsFinalize=false;}

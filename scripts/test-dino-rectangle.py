@@ -43,7 +43,11 @@ with tempfile.TemporaryDirectory() as folder:
         'output': str(p / 'out.png'),
         'regions': [region],
     })
-    out = np.asarray(Image.open(p / 'out.png').convert('RGB'))
+    local = Image.open(p / 'patch.png')
+    assert local.mode == 'RGB', 'DINO intermediate must remain an opaque scene crop, not an alpha cutout'
+    composed = Image.open(p / 'out.png')
+    assert composed.mode == 'RGB', 'Photoshop writeback must be an opaque full scene, not an alpha patch'
+    out = np.asarray(composed)
     white = np.all(out == (255, 255, 255), axis=2)
     red = np.all(out == (255, 0, 0), axis=2)
     assert np.count_nonzero(red) == np.count_nonzero(a)
@@ -65,4 +69,10 @@ with tempfile.TemporaryDirectory() as folder:
     else:
         raise AssertionError('aspect mismatch accepted')
 
-print('PASS: DINO rectangle ownership, padded square context, and aspect guard')
+panel = (ROOT / 'cep' / 'panel.js').read_text()
+revisions = (ROOT / 'cep' / 'revisions.cjs').read_text()
+assert "transparent:false" in panel and "output,patches:null" in panel
+assert "transparent:false" in revisions and "output:composition.output,patches:null" in revisions
+assert "transparent:true" not in panel and "transparent:!!p.dualRole" not in revisions
+
+print('PASS: DINO rectangle ownership, opaque full-scene writeback, padded square context, and aspect guard')
