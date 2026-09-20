@@ -110,7 +110,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
         const children=[];
         for(let i=0;i<visionResult.regions.length;i++){
           const r=visionResult.regions[i];
-          const regionTask={...t,role:r.role||t.role,product:t.dualRole?t.roleProducts[r.role]:t.product,material:t.dualRole?t.roleMaterials[r.role]:t.material,id:t.id+'-r'+i,slot:i+1,shoeCount:r.shoeCount||1,visionMask:r.mask,exportBox:r.box,input:r.input,previewValidation:'unvalidated',phase:'queued',exported:true};
+          const regionTask={...t,role:r.role||t.role,product:t.dualRole?t.roleProducts[r.role]:t.product,material:t.dualRole?t.roleMaterials[r.role]:t.material,id:t.id+'-r'+i,slot:i+1,shoeCount:r.shoeCount||1,visionMask:r.mask,maskMode:r.maskMode, noMaskExpansion:!!r.noMaskExpansion,exportBox:r.box,input:r.input,previewValidation:'unvalidated',phase:'queued',exported:true};
           if(!regionTask.product||!regionTask.material)throw Error('鞋位缺少明确的主次推款色');
           const applied=await host('applyVisionRegion',{id:regionTask.id,layerId:t.layerId,box:r.box,mask:r.mask});
           // Photoshop clips a crop to the internal canvas. Use that exact box
@@ -150,7 +150,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     for(const r of extra){
       const product=t.dualRole?t.roleProducts[r.role]:t.product,material=t.dualRole?t.roleMaterials[r.role]:t.material;
       if(!product||!material)throw Error('新增候选缺少明确款色；保留原任务');
-      const child={...t,children:undefined,id:t.id+'-r'+(t.children.length+additions.length),role:r.role||t.role,product,material,visionMask:r.mask,exportBox:r.box,input:r.input,shoeCount:r.shoeCount||1,exported:true,written:false,preview:null,phase:'queued',previewValidation:'unvalidated',status:'新增检测鞋位，待生成'};
+      const child={...t,children:undefined,id:t.id+'-r'+(t.children.length+additions.length),role:r.role||t.role,product,material,visionMask:r.mask,maskMode:r.maskMode,noMaskExpansion:!!r.noMaskExpansion,exportBox:r.box,input:r.input,shoeCount:r.shoeCount||1,exported:true,written:false,preview:null,phase:'queued',previewValidation:'unvalidated',status:'新增检测鞋位，待生成'};
       const applied=await host('applyVisionRegion',{id:child.id,layerId:t.layerId,box:r.box,mask:r.mask});
       if(JSON.stringify(applied.box)!==JSON.stringify(r.box))throw Error('新增鞋位坐标不一致');
       additions.push(child);
@@ -498,8 +498,8 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
             // transaction hides the separate layers in applySmart with rollback.
             finalizeRoleMarkers:!!t.dualRole&&complete.length===all.length&&!hasUnreviewedCandidates(parent),
             protectedMarkers:t.dualRole?(t.protection.roleMarkers||[]):[],
-            protectionRegions:all.map(x=>({box:x.exportBox,mask:x.visionMask,role:x.role})),
-            regions:complete.map(x=>({id:x.id,role:x.role,sceneType:x.protection.sceneType,written:!!x.written,box:x.exportBox,mask:x.visionMask,generated:x.preview,output:path.join(dir,x.id+'-composite.png')}))});
+            protectionRegions:all.map(x=>({box:x.exportBox,mask:x.visionMask,maskMode:x.maskMode,noMaskExpansion:!!x.noMaskExpansion,role:x.role})),
+            regions:complete.map(x=>({id:x.id,role:x.role,sceneType:x.protection.sceneType,maskMode:x.maskMode,noMaskExpansion:!!x.noMaskExpansion,written:!!x.written,box:x.exportBox,mask:x.visionMask,generated:x.preview,output:path.join(dir,x.id+'-composite.png')}))});
           for(const bad of composed.rejected||[]){const r=all.find(x=>x.id===bad.id);r.previewValidation='invalid';r.phase='invalid_preview';r.validationError=bad.error;r.status='预览验证失败：'+bad.error+'；已保留，需明确重新生成';}
           const accepted=new Set(composed.regions.map(r=>r.id));complete=complete.filter(r=>accepted.has(r.id));
           for(const r of complete){r.previewValidation='valid';if(!r.written){r.phase='composable';r.status='本地验证通过，待回写';}}

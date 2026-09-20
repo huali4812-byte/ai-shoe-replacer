@@ -9,7 +9,7 @@ function createRevisions({api,vision,host,root}) {
   async function compose(p,r,preview,folder,refinedMask){
     const all=regions(p),chosen=all.filter(x=>x===r||x.written);
     if(chosen.some(x=>!x.visionMask||!x.preview||x.protection.sourceFile!==r.protection.sourceFile))throw Error('已有结果或原始画布不完整，禁止覆盖');
-    const out=await vision.request({action:'compose_parent',source:r.protection.sourceFile,output:path.join(folder,'full-composite.png'),allowPartial:false,requireRoles:!!p.dualRole,transparent:!!p.dualRole,finalizeRoleMarkers:!!p.dualRole&&chosen.length===all.length&&!(p.detectionWarnings&&p.detectionWarnings.length&&p.candidateReview!=='dismissed'),protectedMarkers:p.dualRole?(r.protection.roleMarkers||[]):[],protectionRegions:all.map(x=>({box:x.exportBox,mask:x===r&&refinedMask?refinedMask:x.visionMask,role:x.role})),regions:chosen.map((x,i)=>({id:x.id,role:x.role,written:!!x.written,box:x.exportBox,mask:x===r&&refinedMask?refinedMask:x.visionMask,generated:x===r?preview:x.preview,output:path.join(folder,'patch-'+i+'.png')}))});
+    const out=await vision.request({action:'compose_parent',source:r.protection.sourceFile,output:path.join(folder,'full-composite.png'),allowPartial:false,requireRoles:!!p.dualRole,transparent:!!p.dualRole,finalizeRoleMarkers:!!p.dualRole&&chosen.length===all.length&&!(p.detectionWarnings&&p.detectionWarnings.length&&p.candidateReview!=='dismissed'),protectedMarkers:p.dualRole?(r.protection.roleMarkers||[]):[],protectionRegions:all.map(x=>({box:x.exportBox,mask:x===r&&refinedMask?refinedMask:x.visionMask,maskMode:x.maskMode,noMaskExpansion:!!x.noMaskExpansion,role:x.role})),regions:chosen.map((x,i)=>({id:x.id,role:x.role,written:!!x.written,box:x.exportBox,mask:x===r&&refinedMask?refinedMask:x.visionMask,maskMode:x.maskMode,noMaskExpansion:!!x.noMaskExpansion,generated:x===r?preview:x.preview,output:path.join(folder,'patch-'+i+'.png')}))});
     if(!out.output||out.rejected&&out.rejected.length||!out.regions||chosen.some(x=>!out.regions.some(y=>y.id===x.id)))throw Error('合成校验未完整通过，保留当前版本');
     return out;
   }
@@ -29,6 +29,7 @@ function createRevisions({api,vision,host,root}) {
       const copies=originals.map((f,i)=>{const dest=path.join(folder,'input-'+i+path.extname(f));fs.copyFileSync(i>=2?require('./reference-cache.cjs').snapshot(f):f,dest);return dest;});
       v.inputs=copies;v.selectedReferences=selectedReferences;v.editMask=copies[1];record(v);
       if(local){
+        if(r.maskMode==='dino_rectangle')throw Error('当前鞋位使用 DINO 矩形蒙版，不再执行 SAM 轮廓补检');
         const detected=(r.visionRegions||[]).find(x=>JSON.stringify(x.box)===JSON.stringify(r.exportBox));
         const shoeBoxes=detected&&detected.dinoBoxes?detected.dinoBoxes.map(b=>[b[0]-r.exportBox[0],b[1]-r.exportBox[1],b[2]-r.exportBox[0],b[3]-r.exportBox[1]]):undefined;
         const refined=await vision.request({action:'refine_region',input:copies[0],mask:copies[1],shoeBoxes,repairMode,output:path.join(folder,'refined-mask.png')});

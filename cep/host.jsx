@@ -246,10 +246,9 @@ var AI_Shoe_CEP = (function () {
         var sourceFile=a.contentFile.replace(/\.psb$/i,'-full.png');
         try{for(var mi=0;mi<markers.length;mi++)find(d.layers,markers[mi].id).visible=false;exportCrop(d,[0,0,d.width.as('px'),d.height.as('px')],sourceFile);}
         finally{for(var mi=0;mi<markers.length;mi++)find(d.layers,markers[mi].id).visible=markers[mi].wasVisible;}
-        if(channels.length===1&&!a.dualRole){
-          d.selection.load(channels[0]);var region=actions.captureSmartProtection({id:a.id,layerId:t.layerId});
-          return {box:region.box,smartLayerId:t.layerId,source:'namedChannel',sourceFile:sourceFile,regions:[{box:region.box,mask:null}]};
-        }
+        // All automatic shoe preparation now uses DINO rectangles. Existing
+        // named semantic channels are diagnostic metadata only and must not
+        // bypass detector ownership or reintroduce silhouette masks.
         return {source:'needsVision',sourceFile:sourceFile,smartLayerId:t.layerId,documentId:d.id,roleMarkers:markers,randomPairRoles:!!a.dualRole&&!markers.length,randomMainPair:t.randomMainPair,sceneType:sceneType};
       }finally{app.activeDocument=parent;}
     },

@@ -56,6 +56,20 @@ def safe_box(box, size, xpad=.14, ypad=.18):
     return [max(0,int(x0-bw*xpad)),max(0,int(y0-bh*ypad)),min(w,int(x1+bw*xpad)),min(h,int(y1+bh*ypad))]
 
 
+def dino_rectangle_region(box, size):
+    """Use the detector rectangle as ownership and a padded square as AI context."""
+    width, height = size
+    edit = [max(0, int(math.floor(box[0]))), max(0, int(math.floor(box[1]))),
+            min(width, int(math.ceil(box[2]))), min(height, int(math.ceil(box[3])))]
+    if edit[2] <= edit[0] or edit[3] <= edit[1]:
+        raise ValueError('DINO 鞋框为空')
+    crop = square_box(edit, size)
+    mask = Image.new('L', (crop[2]-crop[0], crop[3]-crop[1]), 0)
+    mask.paste(255, (edit[0]-crop[0], edit[1]-crop[1],
+                     edit[2]-crop[0], edit[3]-crop[1]))
+    return edit, crop, mask
+
+
 def boxes_near(a, b):
     """Group shoes whose padded crops would show each other."""
     aw, ah = a[2]-a[0], a[3]-a[1]
@@ -313,21 +327,21 @@ def composite(request):
         raise ValueError('空蒙版，禁止回写')
     box = region['box']
 
-    # Check for inverted mask (background writable instead of foreground)
-    from mask_polarity import propose
-    repaired, polarity = propose(source, mask, box)
     correction = None
-    if polarity['status'] == 'candidate':
-        correction = {'method': 'white_background_inversion', 'evidence': polarity}
-        mask = repaired
-    elif polarity['status'] not in ('unchanged', 'not_applicable'):
-        correction = {'method': 'polarity_check_inconclusive', 'evidence': polarity}
-
-    mask, legacy_correction = corrected_mask(source, box, mask)
-    if legacy_correction and not correction:
-        correction = legacy_correction
-    elif legacy_correction and correction:
-        correction = {'primary': correction, 'secondary': legacy_correction}
+    if region.get('maskMode') != 'dino_rectangle':
+        # Legacy/manual semantic masks retain polarity and verified repair support.
+        from mask_polarity import propose
+        repaired, polarity = propose(source, mask, box)
+        if polarity['status'] == 'candidate':
+            correction = {'method': 'white_background_inversion', 'evidence': polarity}
+            mask = repaired
+        elif polarity['status'] not in ('unchanged', 'not_applicable'):
+            correction = {'method': 'polarity_check_inconclusive', 'evidence': polarity}
+        mask, legacy_correction = corrected_mask(source, box, mask)
+        if legacy_correction and not correction:
+            correction = legacy_correction
+        elif legacy_correction and correction:
+            correction = {'primary': correction, 'secondary': legacy_correction}
 
     generated = Image.open(request['generated']).convert('RGB')
     size = (box[2]-box[0], box[3]-box[1])
@@ -501,16 +515,23 @@ def compose_parent(request):
 class Vision:
     def __init__(self):
         import torch
-        from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection, SamProcessor, SamModel
+        from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
         self.torch = torch
         torch.set_num_threads(4)
         # CPU avoids unsupported MPS operators and cross-device numerical differences.
         self.detector_processor = AutoProcessor.from_pretrained('IDEA-Research/grounding-dino-tiny')
         self.detector = AutoModelForZeroShotObjectDetection.from_pretrained('IDEA-Research/grounding-dino-tiny').eval()
-        self.sam_processor = SamProcessor.from_pretrained('facebook/sam-vit-base')
-        self.sam = SamModel.from_pretrained('facebook/sam-vit-base').eval()
+        # Normal detection is DINO-rectangle-only. Keep SAM lazy for the explicit
+        # legacy/manual mask-refinement command, so ordinary shoe preparation
+        # neither loads nor calls the segmentation model.
+        self.sam_processor = None
+        self.sam = None
 
     def segment(self, image, boxes):
+        if self.sam_processor is None:
+            from transformers import SamProcessor, SamModel
+            self.sam_processor = SamProcessor.from_pretrained('facebook/sam-vit-base')
+            self.sam = SamModel.from_pretrained('facebook/sam-vit-base').eval()
         inputs = self.sam_processor(images=image, input_boxes=[boxes], return_tensors='pt')
         with self.torch.inference_mode():
             output = self.sam(**inputs)
@@ -633,7 +654,7 @@ class Vision:
             raise ValueError('内部图片超过 8000 万像素，需单独处理')
         image = original.copy()
         image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
-        inputs = self.detector_processor(images=image, text='a shoe. a sock. pants. a bare leg.', return_tensors='pt')
+        inputs = self.detector_processor(images=image, text='a shoe.', return_tensors='pt')
         with self.torch.inference_mode():
             outputs = self.detector(**inputs)
         result = self.detector_processor.post_process_grounded_object_detection(
@@ -687,90 +708,49 @@ class Vision:
                 if not duplicate:
                     detections.append({'box':box,'score':score,'label':'a shoe','pass':'tile'})
         shoes = [d for d in detections if 'shoe' in d['label']]
-        report = {'source':request['source'], 'size':list(original.size), 'detections':detections, 'regions':[], 'detector':'grounding-dino-tiny', 'safePadding':{'x':.14,'y':.18}, 'sceneType':'shoe_structure' if structure else 'person'}
+        report = {'source':request['source'], 'size':list(original.size), 'detections':detections, 'regions':[], 'detector':'grounding-dino-tiny', 'maskMode':'dino_rectangle', 'safePadding':{'fraction':.24,'minimumPixels':24,'shape':'square'}, 'sceneType':'shoe_structure' if structure else 'person'}
         if not shoes:
             report['status'] = 'no_shoe_detected'
             return report
         if len(shoes) > 8:
             raise ValueError('检测鞋数超过 8，疑似多模块内容，停止自动替换')
-        # Single-person behavior stays unchanged. For dual-person images use
-        # native-resolution safe crops below; expanding a prompt on a tiny full
-        # canvas can make SAM include the adjacent shoe or miss distant shoes.
-        sam_boxes = [d['box'] for d in detections]
-        masks = self.segment(image, sam_boxes)
-        protected = np.zeros((image.height, image.width), dtype=bool)
-        for d, (mask, confidence) in zip(detections, masks):
-            if 'shoe' not in d['label'] and confidence >= .8:
-                protected |= mask
+        # DINO rectangles are now the sole ownership source. SAM is deliberately
+        # absent here: the detector box becomes the local write mask, while a
+        # larger square crop supplies safe scene context to the image model.
         folder = Path(request['folder']); folder.mkdir(parents=True, exist_ok=True)
         overlay = original.copy()
         sx, sy = original.width / image.width, original.height / image.height
         def original_box(box):
-            return [round(box[0] * sx), round(box[1] * sy),
-                    round(box[2] * sx), round(box[3] * sy)]
+            return [box[0] * sx, box[1] * sy, box[2] * sx, box[3] * sy]
         dual = bool(request.get('roleMarkers') or request.get('randomPairRoles'))
-        protected_full = np.array(Image.fromarray(protected.astype('uint8')*255).resize(original.size, Image.Resampling.NEAREST)) > 0 if dual else None
         accepted = []
-        for i, (d, (mask, confidence)) in enumerate(zip(detections, masks)):
+        for i, d in enumerate(detections):
             if 'shoe' not in d['label']:
                 continue
-            d['dino_box'] = original_box(d['box'])
-            d['safe_box'] = safe_box(d['dino_box'], original.size)
-            if dual:
-                context = d['safe_box']
-                b = d['dino_box']
-                local_box = [b[0]-context[0], b[1]-context[1], b[2]-context[0], b[3]-context[1]]
-                local_mask, confidence = self.segment(original.crop(context), [local_box])[0]
-                full_mask = Image.new('L', original.size, 0)
-                full_mask.paste(Image.fromarray(local_mask.astype('uint8')*255), tuple(context[:2]))
-                mask = np.array(full_mask) > 0
-                d['segmentationMode'] = 'native_safe_crop'
-            d['segmentationScore'] = confidence
-            d['sam_score'] = confidence
-            d['mask_area'] = int(np.count_nonzero(mask))
+            edit_box, crop_box, _ = dino_rectangle_region(original_box(d['box']), original.size)
+            d['dino_box'] = edit_box
+            d['safe_box'] = crop_box
+            d['segmentationMode'] = 'dino_rectangle'
+            d['mask_area'] = (edit_box[2]-edit_box[0])*(edit_box[3]-edit_box[1])
             if d.get('pass') == 'tile':
                 bw, bh = d['box'][2]-d['box'][0], d['box'][3]-d['box'][1]
-                # Tile-only detections are accepted only when SAM is strong
-                # and the candidate has a shoe-like compact footprint. This
-                # admits the missed rear shoe while continuing to reject the
-                # tall background/arm false positives seen in the same batch.
-                compact = .38 <= (bw / max(bh, 1)) <= (4.0 if dual and confidence >= .93 else 2.4)
-                if confidence < .93 or not compact:
-                    if not (request.get('roleMarkers') and confidence >= .90 and compact):
-                        d['skip'] = 'tile_candidate_requires_semantic_verification'
-                        continue
-            area_box = d['dino_box'] if dual else d['box']
-            area = (area_box[2]-area_box[0])*(area_box[3]-area_box[1])
-            if confidence < .85 or np.count_nonzero(mask) < max(20,area*.08):
-                d['skip'] = 'segmentation_uncertain'; continue
-            # Small expansion for shoe shape and contact blending; subtract detected clothing/skin.
-            radius = max(1, min(12, round(math.sqrt(area)*.025)))
-            expanded = np.array(Image.fromarray(mask.astype('uint8')*255).filter(ImageFilter.MaxFilter(radius*2+1))) > 0
+                compact = .38 <= (bw / max(bh, 1)) <= 4.0
+                if not compact:
+                    d['skip'] = 'tile_candidate_not_shoe_shaped'
+                    continue
             if structure:
-                # Human labels on an exploded diagram are not clothing evidence.
-                # Restrict writes to one confidently segmented, horizontal body;
-                # floating inserts and the background remain outside the mask.
                 bw, bh = d['box'][2]-d['box'][0], d['box'][3]-d['box'][1]
-                if confidence < .95 or bw / max(bh, 1) < 2 or bw < image.width * .5:
+                if bw / max(bh, 1) < 2 or bw < image.width * .5:
                     d['skip'] = 'structure_body_uncertain'
                     continue
-                expanded = mask.copy()
-                d['protectionMode'] = 'structure_body_only'
-            protection = np.zeros_like(expanded) if structure else (protected_full if dual else protected)
-            protected_overlap = int(np.count_nonzero(expanded & protection))
-            expanded &= ~protection
-            d['protected_overlap'] = protected_overlap
-            full = expanded if dual else np.array(Image.fromarray(expanded.astype('uint8')*255).resize(original.size, Image.Resampling.NEAREST)) > 0
-            if not np.any(full):
-                d['skip'] = 'empty_after_protection'; continue
-            ys,xs = np.where(full)
-            bounds = [int(xs.min()),int(ys.min()),int(xs.max()+1),int(ys.max()+1)]
+                d['protectionMode'] = 'structure_dino_rectangle'
             role = None
             d['role'] = role
-            accepted.append({'index':i, 'role':role, 'mask':full, 'bounds':bounds,
-                             'cropBox':square_box(bounds, original.size),
-                             'score':d['score'], 'segmentationScore':confidence,
-                             'protectedOverlap':protected_overlap})
+            full = np.zeros((original.height, original.width), dtype=bool)
+            full[edit_box[1]:edit_box[3], edit_box[0]:edit_box[2]] = True
+            accepted.append({'index':i, 'role':role, 'mask':full, 'bounds':edit_box,
+                             'cropBox':crop_box, 'score':d['score'],
+                             'segmentationScore':None, 'protectedOverlap':0})
         role_error = None
         if dual:
             try:
@@ -800,36 +780,26 @@ class Vision:
             box = square_box(bounds, original.size)
             mask_image = Image.fromarray(full.astype('uint8')*255).crop(box)
             crop = original.crop(box)
-            detail_diagnostics = []
-            for item in ([] if structure else group):
-                b = detections[item['index']]['dino_box']
-                local = [b[0]-box[0],b[1]-box[1],b[2]-box[0],b[3]-box[1]]
-                context = safe_box(local, crop.size, xpad=.20, ypad=.30)
-                refined, details = self.recover_pull_tabs(crop.crop(context), mask_image.crop(context))
-                mask_image.paste(refined, tuple(context[:2]))
-                for detail in details:
-                    detail['contextBox'] = context
-                detail_diagnostics.extend(details)
             input_path = folder/('shoe-group-%d.png'%group_index)
             mask_path = folder/('mask-group-%d.png'%group_index)
-            mask_image, correction = corrected_mask(original, box, mask_image)
             crop.save(input_path); mask_image.save(mask_path)
             report['regions'].append({'index':group_index,'role':group[0].get('role'),'box':box,
-                                      'maskCorrection':correction, 'pullTabRecovery':detail_diagnostics,
+                                      'maskMode':'dino_rectangle','maskCorrection':None,
+                                      'pullTabRecovery':[], 'noMaskExpansion':True,
                                       'dinoBoxes':[detections[item['index']].get('dino_box') for item in group],
                                       'safeBoxes':[detections[item['index']].get('safe_box') for item in group],
                                       'input':str(input_path),
                                       'mask':str(mask_path),'shoeCount':len(group),
                                       'detectionIndexes':[item['index'] for item in group],
                                       'score':min(item['score'] for item in group),
-                                      'segmentationScore':min(item['segmentationScore'] for item in group)})
+                                      'segmentationScore':None})
             overlay.paste(Image.new('RGB',original.size,(255,0,80)),(0,0),Image.fromarray((full*100).astype('uint8')))
         if not structure:
             # Reconcile conflicts using the actual recovered/corrected masks.
             # The pre-generation detection items do not have final mask paths.
             report['regions'] = merge_overlapping_regions(original, report['regions'], folder)
             validate_shoe_supports(original.size, report['regions'])
-            report['generationMode'] = 'shoe_pairs'
+            report['generationMode'] = 'dino_rectangle_regions'
         draw = ImageDraw.Draw(overlay)
         for index, detection in enumerate(detections):
             if detection.get('skip'):
@@ -846,7 +816,7 @@ class Vision:
                 d['rejection_reason'] = d.get('skip')
         report['rejected'] = [
             {'index': i, 'dinoBox': d.get('dino_box', d.get('box')), 'safeBox': d.get('safe_box'),
-             'samScore': d.get('segmentationScore'), 'rejectionReason': d.get('skip')}
+             'samScore': None, 'rejectionReason': d.get('skip')}
             for i, d in enumerate(detections) if d.get('skip')
         ]
         report['preview'] = str(folder/'detection-preview.jpg')
