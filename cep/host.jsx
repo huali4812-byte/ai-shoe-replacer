@@ -570,6 +570,7 @@ var AI_Shoe_CEP = (function () {
       app.activeDocument=t.parent;var parentHistory=t.parent.activeHistoryState;
       app.activeDocument=t.doc;var internalHistory=t.doc.activeHistoryState;
       app.activeDocument=t.doc;
+      var applyStage='prepare_internal';
       try{
         if(a.patches&&a.patches.length){
           for(var pi=0;pi<a.patches.length;pi++){
@@ -586,17 +587,21 @@ var AI_Shoe_CEP = (function () {
         // if saving or replacing the parent fails; original artwork stays intact.
         for(var gi=0;gi<previousPatchGroups.length;gi++){var oldPatch=find(t.doc.layers,previousPatchGroups[gi]);if(oldPatch)oldPatch.visible=false;}
         if(t.roleMarkers){for(var mi=0;mi<t.roleMarkers.length;mi++){var marker=find(t.doc.layers,t.roleMarkers[mi].id);if(!marker)throw Error('主次推提示图层已变化，请重新准备任务');marker.visible=!a.hideRoleMarkers;}}
+        applyStage='save_internal_content';
         actions.saveCopy({documentId:t.doc.id,output:a.contentFile});
+        applyStage='activate_parent';
         app.activeDocument=t.parent;documentFor(t.parent.id,true);t.parent.activeLayer=find(t.parent.layers,t.layerId);
         // Replace an independent parent instance so shared embedded contents cannot
         // leave the visible layer pointing at a stale/shared object.
         var originalTarget=find(t.parent.layers,t.layerId),target=null;
         if(!originalTarget)throw Error('回写前找不到原目标智能对象');
+        applyStage='read_original_clipping';
         var expectedGrouped=originalTarget.grouped;
         if(t.parentTargetId) target=find(t.parent.layers,t.parentTargetId);
         if(!target && t.parentKey && smartTaskParents[t.parentKey].parentTargetId){target=find(t.parent.layers,smartTaskParents[t.parentKey].parentTargetId);t.parentTargetId=target&&target.id;}
         if(!target){
           if(!originalTarget)throw Error('回写后找不到目标智能对象');
+          applyStage='duplicate_parent_smart_object';
           app.activeDocument=t.parent; t.parent.activeLayer=originalTarget;
           executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);
           target=t.parent.activeLayer;
@@ -607,16 +612,19 @@ var AI_Shoe_CEP = (function () {
         // ReplaceContents operates on the active layer. Cached targets are
         // reused by later regions, so activate the cached copy before calling
         // the action; otherwise Photoshop replaces the hidden original layer.
+        applyStage='replace_parent_contents';
         t.parent.activeLayer=target;
         var desc=new ActionDescriptor();desc.putPath(c('null'),new File(a.contentFile));executeAction(s('placedLayerReplaceContents'),desc,DialogModes.NO);
         // MakeCopy/ReplaceContents can drop the original clipping relationship.
         // Restore it even for a cached target from a previous write.
         if(!originalTarget||target.id===originalTarget.id)throw Error('回写目标与原层身份异常');
+        applyStage='restore_parent_layer_order';
         target.move(originalTarget,ElementPlacement.PLACEBEFORE);
         // Photoshop may settle clipping after a move/visibility change. Reacquire
         // by ID and repair final state, not a stale DOM handle. Never accept a
         // persistent mismatch, and never toggle a whole clipping group.
-        var settleTargetId=target.id,settleOriginalId=originalTarget.id,settled=false,settleErrors=[],settleAttempt;
+        var settleTargetId=target.id,settleOriginalId=originalTarget.id,settled=false,settleErrors=[],settleAttempt,lastGrouped='unread',lastOriginalVisible='unread',lastTargetVisible='unread';
+        applyStage='settle_parent_visibility_and_clipping';
         for(settleAttempt=0;settleAttempt<3;settleAttempt++){
           app.activeDocument=t.parent;
           target=find(t.parent.layers,settleTargetId);originalTarget=find(t.parent.layers,settleOriginalId);
@@ -625,24 +633,28 @@ var AI_Shoe_CEP = (function () {
             t.parent.activeLayer=target;
             originalTarget.visible=false;target.visible=true;
             target.grouped=expectedGrouped;
-          }catch(settleError){settleErrors.push(settleError.message);}
+          }catch(settleError){settleErrors.push('设置'+(settleAttempt+1)+'：'+settleError.message);}
           try{app.refresh();}catch(ignoreSettleRefresh){}
           target=find(t.parent.layers,settleTargetId);originalTarget=find(t.parent.layers,settleOriginalId);
-          if(target&&originalTarget&&target.grouped===expectedGrouped&&!originalTarget.visible&&target.visible){settled=true;break;}
+          try{
+            if(!target||!originalTarget)throw Error('图层不存在');
+            lastGrouped=target.grouped;lastOriginalVisible=originalTarget.visible;lastTargetVisible=target.visible;
+            if(lastGrouped===expectedGrouped&&!lastOriginalVisible&&lastTargetVisible){settled=true;break;}
+          }catch(verifySettleError){settleErrors.push('校验'+(settleAttempt+1)+'：'+verifySettleError.message);}
         }
-        if(!settled)throw Error('回写剪贴关系或原层可见性校验失败（已恢复3次）：目标层='+settleTargetId+'，原层='+settleOriginalId+'，期望剪贴='+expectedGrouped+'，目标剪贴='+(target?target.grouped:'missing')+'，原层可见='+(originalTarget?originalTarget.visible:'missing')+'；'+settleErrors.join('；'));
+        if(!settled)throw Error('回写剪贴关系或原层可见性校验失败（已恢复3次）：目标层='+settleTargetId+'，原层='+settleOriginalId+'，期望剪贴='+expectedGrouped+'，目标剪贴='+lastGrouped+'，目标可见='+lastTargetVisible+'，原层可见='+lastOriginalVisible+'；'+settleErrors.join('；'));
         t.parent.activeLayer=target;
         try { app.refresh(); } catch(ignoreRefresh) {}
         t.patchGroupIds=newPatchGroups;
         return {layerId:target.id,originalLayerId:t.layerId,visible:target.visible,documentId:t.parent.id,contentFile:a.contentFile,clippingRestoreAttempts:settleAttempt+1,expectedGrouped:expectedGrouped};
       }catch(e){
-        var rollbackErrors=[];
+        var originalApplyError=e,rollbackErrors=[];
         // Always attempt both documents; one failed history restore must not skip the other.
         try{app.activeDocument=t.doc;t.doc.activeHistoryState=internalHistory;}catch(internalError){rollbackErrors.push('内部：'+internalError.message);}
         try{app.activeDocument=t.parent;t.parent.activeHistoryState=parentHistory;}catch(parentError){rollbackErrors.push('父文档：'+parentError.message);}
         t.parentTargetId=previousTargetId;if(t.parentKey&&smartTaskParents[t.parentKey])smartTaskParents[t.parentKey].parentTargetId=previousTargetId;
-        if(rollbackErrors.length){t.recoveryBlocked=true;throw Error(e.message+'；回滚未完成，任务已锁定：'+rollbackErrors.join('；'));}
-        throw e;
+        if(rollbackErrors.length){t.recoveryBlocked=true;throw Error('applySmart阶段='+applyStage+'；'+originalApplyError.message+'；回滚未完成，任务已锁定：'+rollbackErrors.join('；'));}
+        throw Error('applySmart阶段='+applyStage+'；'+originalApplyError.message);
       }finally{try{app.activeDocument=t.parent;}catch(ignoreActivation){}}
     },
     exportMarked:function(a){
