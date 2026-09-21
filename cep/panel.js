@@ -8,7 +8,7 @@
   const state={scan:null,products:[],materials:[],tasks:[],busy:false,targetSku:'',theme:localStorage.getItem('shoe-theme')==='dark'?'dark':'light'};
   function applyTheme(){document.body.dataset.theme=state.theme;$('themeToggle').textContent=state.theme==='dark'?'☀ 白天':'☾ 夜间';}
 const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
-  function host(method,args){return new Promise((resolve,reject)=>cs.evalScript('AI_Shoe_CEP.dispatch('+JSON.stringify(method)+','+JSON.stringify(args||{})+')',raw=>{try{if(!raw||!String(raw).trim())throw Error('Photoshop 未返回结果，可能是脚本异常或插件未重载');const r=JSON.parse(raw);if(!r.ok)throw Error(r.error);resolve(r.data);}catch(e){recordFailure(e,'photoshop:'+method,args);reject(e);}}));}
+  function host(method,args){return new Promise((resolve,reject)=>{const script='AI_Shoe_CEP.dispatch('+JSON.stringify(method)+','+JSON.stringify(args||{})+')';cs.evalScript(script,raw=>{try{const text=String(raw==null?'':raw).trim();if(text==='EvalScript error.')throw Error('Photoshop ExtendScript执行失败（'+method+'），CEP只返回了EvalScript error；请检查Photoshop脚本错误或重启CEP。');if(!text)throw Error('Photoshop JSX未返回结果（'+method+'）。可能是ExtendScript执行异常、脚本未重载，或返回值被CEP截断；请查看同一时间的Photoshop/CEP日志。');let r;try{r=JSON.parse(text);}catch(parseError){throw Error('Photoshop返回了非JSON结果（'+method+'）：'+text.slice(0,240));}if(!r||typeof r!=='object')throw Error('Photoshop返回JSON类型错误（'+method+'）');if(!r.ok)throw Error(r.error||('Photoshop操作失败：'+method));resolve(r.data);}catch(e){recordFailure(e,'photoshop:'+method,{...(args||{}),script,raw:String(raw==null?'':raw).slice(0,500)});reject(e);}});});}
   // Presentation state only; never used to decide generation or writeback.
   const expandedTaskPaths=new Set(),expandedTaskCards=new Set();
   let batchStage='';
