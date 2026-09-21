@@ -19,6 +19,11 @@ function run(failure,restoreFailure,hide=false,clipped=true,settleMode='normal')
 const failed=run('save','internal');console.log('E internal restore failure:',JSON.stringify({error:failed.error,restores:failed.restores}));
 const partial=run();console.log('E partial marker:',JSON.stringify({moved:partial.moved,sameParent:partial.marker.parent===partial.group}));
 if(!baseline){
+ assert.match(source,/roleTextLayers:roleTextLayers/);
+ assert.match(source,/normalizedText:text/);
+ assert.match(source,/recognizedRole:role/);
+ assert.match(source,/roleAssignmentMode=markerPlan\.random\?'stable_random':'text_coordinates'/);
+ assert.match(source,/roleAssignmentMode='invalid_markers'/);
  const planText=source.slice(source.indexOf('  function dualRoleMarkerPlan('),source.indexOf('  function identityDisplayWarp('));
  const planCtx={};vm.runInNewContext(planText,planCtx);
  const random0=planCtx.dualRoleMarkerPlan([],null,.2);assert.equal(random0.random,true);assert.equal(random0.mainPair,0);

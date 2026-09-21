@@ -253,19 +253,22 @@ var AI_Shoe_CEP = (function () {
     autoPrepareSmart:function(a){
       var parent=activatePreparedParent(a.documentId);
       try{
-        actions.openSmartTask(a);var t=smartTasks[a.id],d=t.doc,items=[],channels=[];
+        actions.openSmartTask(a);var t=smartTasks[a.id],d=t.doc,items=[],channels=[],markers=[],roleTextLayers=[];
         function collect(ls,p){for(var i=0;i<ls.length;i++){var l=ls[i];if(!l.visible)continue;if(l.typename==='LayerSet'){collect(l.layers,p+'/'+l.name);continue;}items.push({id:l.id,name:p+'/'+l.name,kind:String(l.kind),bounds:bounds(l)});}}
         collect(d.layers,'');
         for(var i=0;i<d.channels.length;i++){var ch=d.channels[i];if(ch.kind!==ChannelType.COMPONENT&&/^(鞋位|鞋部|换鞋|shoe)[ _-]*(mask|蒙版|选区)?[ _-]*[0-9]*$/i.test(ch.name))channels.push(ch);}
-        var diag={taskId:a.id,smartLayerId:t.layerId,width:d.width.as('px'),height:d.height.as('px'),layers:items,shoeChannels:channels.length};
-        var f=new File(a.diagnostic);f.encoding='UTF8';f.open('w');f.write(json(diag));f.close();
-        var markers=[];
-        function collectMarkers(ls){for(var mi=0;mi<ls.length;mi++){var ml=ls[mi];if(ml.typename==='LayerSet'){collectMarkers(ml.layers);continue;}if(ml.kind===LayerKind.TEXT){var raw=String(ml.textItem.contents),text=raw.replace(/\s/g,''),role=text.indexOf('主推')>=0?'主推':text.indexOf('次推')>=0?'次推':null;if(role){var wasVisible=!!ml.visible;if(!wasVisible)ml.visible=true;var markerBounds=textMarkerBounds(ml);if(!wasVisible)ml.visible=false;if(markerBounds[2]>markerBounds[0]&&markerBounds[3]>markerBounds[1])markers.push({id:ml.id,role:role,bounds:markerBounds,wasVisible:wasVisible,text:raw,boundsSource:(bounds(ml)[2]>bounds(ml)[0]?'layer_bounds':'text_position')});}}}}
+        var diag={taskId:a.id,smartLayerId:t.layerId,width:d.width.as('px'),height:d.height.as('px'),layers:items,shoeChannels:channels.length,dualRole:!!a.dualRole,roleTextLayers:roleTextLayers,roleMarkers:[],roleAssignmentMode:a.dualRole?'pending':'not_dual'};
+        function writeDiagnostic(){var f=new File(a.diagnostic);f.encoding='UTF8';f.open('w');f.write(json(diag));f.close();}
+        function collectMarkers(ls,p){for(var mi=0;mi<ls.length;mi++){var ml=ls[mi],markerPath=p+'/'+ml.name;if(ml.typename==='LayerSet'){collectMarkers(ml.layers,markerPath);continue;}if(ml.kind===LayerKind.TEXT){var raw=String(ml.textItem.contents),text=raw.replace(/\s/g,''),role=text.indexOf('主推')>=0?'主推':text.indexOf('次推')>=0?'次推':null,layerBounds=bounds(ml),markerBounds=null,boundsSource=null,validBounds=false;if(role){var wasVisible=!!ml.visible;if(!wasVisible)ml.visible=true;markerBounds=textMarkerBounds(ml);if(!wasVisible)ml.visible=false;boundsSource=layerBounds[2]>layerBounds[0]?'layer_bounds':'text_position';validBounds=markerBounds[2]>markerBounds[0]&&markerBounds[3]>markerBounds[1];if(validBounds)markers.push({id:ml.id,role:role,bounds:markerBounds,wasVisible:wasVisible,text:raw,boundsSource:boundsSource});}roleTextLayers.push({id:ml.id,name:markerPath,text:raw,normalizedText:text,recognizedRole:role,visible:!!ml.visible,layerBounds:layerBounds,markerBounds:markerBounds,boundsSource:boundsSource,validBounds:validBounds});}}}
         if(a.dualRole){
-          collectMarkers(d.layers);
-          var markerPlan=dualRoleMarkerPlan(markers,t.randomMainPair,Math.random());
-          t.roleMarkers=markers;t.styleCount=markers.length;t.randomMainPair=markerPlan.mainPair;
+          collectMarkers(d.layers,'');diag.roleMarkers=markers;
+          try{
+            var markerPlan=dualRoleMarkerPlan(markers,t.randomMainPair,Math.random());
+            t.roleMarkers=markers;t.styleCount=markers.length;t.randomMainPair=markerPlan.mainPair;
+            diag.roleAssignmentMode=markerPlan.random?'stable_random':'text_coordinates';diag.randomMainPair=t.randomMainPair;
+          }catch(markerError){diag.roleAssignmentMode='invalid_markers';diag.roleMarkerError=markerError.message;writeDiagnostic();throw markerError;}
         }
+        writeDiagnostic();
         // Structural callouts must be present in the immediate containing group.
         // A section name alone also matches people photographs in this template.
         var outer=find(parent.layers,t.layerId),contextText='';
