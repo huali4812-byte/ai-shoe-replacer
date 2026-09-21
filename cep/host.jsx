@@ -62,6 +62,15 @@ var AI_Shoe_CEP = (function () {
   }
   function rgb(d) { d.activeChannels = d.componentChannels; }
   function bounds(layer) { var a = layer.bounds, b = []; for (var i = 0; i < 4; i++) b.push(a[i].as('px')); return b; }
+  function textMarkerBounds(layer){
+    var b=bounds(layer);
+    if(b[2]>b[0]&&b[3]>b[1])return b;
+    try{
+      var p=layer.textItem.position,x=p[0].as('px'),y=p[1].as('px');
+      if(isFinite(x)&&isFinite(y))return [x-1,y-1,x+1,y+1];
+    }catch(e){}
+    return b;
+  }
   function find(list, id) {
     for (var i = 0; i < list.length; i++) { if (list[i].id === id) return list[i]; if (list[i].typename === 'LayerSet') { var r = find(list[i].layers, id); if (r) return r; } }
     return null;
@@ -244,7 +253,7 @@ var AI_Shoe_CEP = (function () {
         var diag={taskId:a.id,smartLayerId:t.layerId,width:d.width.as('px'),height:d.height.as('px'),layers:items,shoeChannels:channels.length};
         var f=new File(a.diagnostic);f.encoding='UTF8';f.open('w');f.write(json(diag));f.close();
         var markers=[];
-        function collectMarkers(ls){for(var mi=0;mi<ls.length;mi++){var ml=ls[mi];if(ml.typename==='LayerSet'){collectMarkers(ml.layers);continue;}if(ml.kind===LayerKind.TEXT){var raw=String(ml.textItem.contents),text=raw.replace(/\s/g,''),role=text.indexOf('主推')>=0?'主推':text.indexOf('次推')>=0?'次推':null;if(role){var wasVisible=!!ml.visible;if(!wasVisible)ml.visible=true;var markerBounds=bounds(ml);if(!wasVisible)ml.visible=false;markers.push({id:ml.id,role:role,bounds:markerBounds,wasVisible:wasVisible,text:raw});}}}}
+        function collectMarkers(ls){for(var mi=0;mi<ls.length;mi++){var ml=ls[mi];if(ml.typename==='LayerSet'){collectMarkers(ml.layers);continue;}if(ml.kind===LayerKind.TEXT){var raw=String(ml.textItem.contents),text=raw.replace(/\s/g,''),role=text.indexOf('主推')>=0?'主推':text.indexOf('次推')>=0?'次推':null;if(role){var wasVisible=!!ml.visible;if(!wasVisible)ml.visible=true;var markerBounds=textMarkerBounds(ml);if(!wasVisible)ml.visible=false;if(markerBounds[2]>markerBounds[0]&&markerBounds[3]>markerBounds[1])markers.push({id:ml.id,role:role,bounds:markerBounds,wasVisible:wasVisible,text:raw,boundsSource:(bounds(ml)[2]>bounds(ml)[0]?'layer_bounds':'text_position')});}}}}
         if(a.dualRole){collectMarkers(d.layers);var main=false,secondary=false;for(var mi=0;mi<markers.length;mi++){main=main||markers[mi].role==='主推';secondary=secondary||markers[mi].role==='次推';}if(!main||!secondary)throw Error('双人任务无法同时读取主推和次推文字坐标，已停止以避免款色换反；请确认智能对象内保留可编辑的主推/次推文字层');t.roleMarkers=markers;t.styleCount=markers.length;}
         // Structural callouts must be present in the immediate containing group.
         // A section name alone also matches people photographs in this template.
