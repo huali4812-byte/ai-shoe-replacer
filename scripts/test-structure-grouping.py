@@ -1,4 +1,4 @@
-"""Test structure diagram retains merged generation path while normal scenes use individual shoes."""
+"""Test structure grouping while normal people scenes use one group per person."""
 import importlib.util
 from pathlib import Path
 
@@ -15,16 +15,16 @@ regions = [
 
 print("Test: Structure diagram vs normal scene generation grouping")
 
-# Normal scene: one region per shoe
+# Normal single-person scene: all retained shoes share one generation region
 normal_groups = vision.generation_groups(regions, structure=False)
 print(f"  Normal scene (structure=False): {len(normal_groups)} groups")
 for i, group in enumerate(normal_groups):
     print(f"    Group {i}: {len(group)} shoe(s), indices {[r['index'] for r in group]}")
 
-if len(normal_groups) != 2:
-    raise AssertionError(f'Expected 2 individual groups, got {len(normal_groups)}')
-if any(len(g) != 1 for g in normal_groups):
-    raise AssertionError('Normal scene should have one shoe per group')
+if len(normal_groups) != 1:
+    raise AssertionError(f'Expected 1 person-level group, got {len(normal_groups)}')
+if len(normal_groups[0]) != 2:
+    raise AssertionError('Normal single-person scene should retain both shoes in one group')
 
 # Structure diagram: merged groups (existing group_nearby_regions behavior)
 structure_groups = vision.generation_groups(regions, structure=True)
@@ -48,11 +48,11 @@ sep_normal = vision.generation_groups(separated_regions, structure=False)
 sep_structure = vision.generation_groups(separated_regions, structure=True)
 
 print(f"\n  Widely separated shoes:")
-print(f"    Normal: {len(sep_normal)} groups (expect 2)")
+print(f"    Normal: {len(sep_normal)} groups (expect 1 person-level region)")
 print(f"    Structure: {len(sep_structure)} groups (expect 2, too far to merge)")
 
-if len(sep_normal) != 2:
-    raise AssertionError('Separated shoes should produce 2 groups in normal mode')
+if len(sep_normal) != 1:
+    raise AssertionError('Single-person task must produce at most 1 normal group')
 
 # Test very close shoes (should merge in structure mode)
 close_regions = [
@@ -64,15 +64,15 @@ close_normal = vision.generation_groups(close_regions, structure=False)
 close_structure = vision.generation_groups(close_regions, structure=True)
 
 print(f"\n  Close shoes (20px gap):")
-print(f"    Normal: {len(close_normal)} groups (expect 2)")
+print(f"    Normal: {len(close_normal)} groups (expect 1 person-level region)")
 print(f"    Structure: {len(close_structure)} groups (expect 1, merged)")
 
-if len(close_normal) != 2:
-    raise AssertionError('Close shoes should still produce 2 groups in normal mode')
+if len(close_normal) != 1:
+    raise AssertionError('Close shoes should share 1 person-level normal group')
 if len(close_structure) != 1:
     raise AssertionError('Close shoes should merge in structure mode')
 
 print("\n✓ PASS: Structure diagram preserves group_nearby_regions merge behavior")
-print("  - Normal scenes: one shoe per generation (individual_shoes mode)")
+print("  - Normal single-person scenes: at most one generation region")
 print("  - Structure diagrams: nearby shoes merged (existing grouped path)")
 print("  - Close proximity merges in structure mode, not in normal mode")

@@ -10,7 +10,7 @@ v = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(v)
 a = {'role': '主推', 'cropBox': [0, 0, 30, 30]}
 b = {'role': '主推', 'cropBox': [15, 0, 45, 30]}
-assert v.generation_groups([a, b]) == [[a, b]]
+assert v.generation_groups([a, b]) == [[a, b]], 'single person must use one scene-level generation'
 assert len(v.generation_groups([a, b], structure=True)) == 1
 assert v.generation_groups([]) == []
 assert v.generation_groups([a, b], generation_kind='sole') == [[a, b]], 'sole must use one scene-level generation'
@@ -21,9 +21,9 @@ assert edge[0] == 0 and edge[1] == 0 and edge[2]-edge[0] == 148
 c = {'role': '次推', 'cropBox': [100, 0, 130, 30]}
 d = {'role': '次推', 'cropBox': [115, 0, 145, 30]}
 assert v.generation_groups([a, c, b, d], generation_kind='sole') == [[a, c, b, d]]
-assert v.generation_groups([a, c, b, d]) == [[a, b], [c, d]]
+assert v.generation_groups([a, c, b, d]) == [[a, b], [c, d]], 'dual person must use one scene per role'
 odd = v.generation_groups([a, b, {'role':'主推','cropBox':[200,0,230,30]}])
-assert sorted(map(len,odd)) == [1,2], odd
+assert len(odd) == 1 and len(odd[0]) == 3, odd
 with tempfile.TemporaryDirectory() as folder:
     def region(name, box, support):
         mask = Image.new('L', (box[2]-box[0], box[3]-box[1]), 0)
@@ -71,4 +71,4 @@ with tempfile.TemporaryDirectory() as folder:
 
     neg = region('negative', [-10, -10, 30, 30], (15, 15, 20, 20))
     v.validate_shoe_supports((40, 40), [neg])
-print('PASS pair generation: clear pairs preferred, roles separated, odd/ambiguous shoes fall back safely')
+print('PASS person-level generation: single person <=1 region, dual person <=2 role regions, sole =1 region')

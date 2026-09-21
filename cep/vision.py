@@ -168,21 +168,21 @@ def _pair_bucket(items):
 
 
 def generation_groups(regions, structure=False, generation_kind=None):
-    """Generate pairs only for pair tasks; marked single tasks stay single."""
+    """Enforce one scene edit per person instead of one edit per DINO box.
+
+    DINO boxes describe local writable ownership, not the number of AI calls.
+    A single-person task always has one scene group; a dual-role task has one
+    group for each assigned person/role (at most two). This prevents r2/r3
+    full-scene generations from successively overwriting a sharper result.
+    """
+    if not regions:return []
     if structure:return group_nearby_regions(regions)
     if generation_kind == 'sole':
-        # A sole task is one scene-level edit. Multiple DINO detections may be
-        # the two visible soles plus nearby shoe structure, but they must share
-        # one scene input, one local ownership mask, and one AI result. Creating
-        # r0/r1/r2 here causes later full-scene patches to overwrite each other.
-        return [list(regions)] if regions else []
-    if generation_kind in ('single_main','single_secondary'):
-        return [[r] for r in regions]
-    buckets={}
-    for region in regions:buckets.setdefault(region.get('role') or '__single_product__',[]).append(region)
-    groups=[]
-    for role in sorted(buckets):groups.extend(_pair_bucket(buckets[role]))
-    return groups
+        return [list(regions)]
+    roles={r.get('role') for r in regions if r.get('role')}
+    if roles:
+        return [[r for r in regions if r.get('role') == role] for role in sorted(roles)]
+    return [list(regions)]
 
 
 def merge_overlapping_regions(source, regions, folder):
@@ -853,7 +853,14 @@ class Vision:
                 for item in accepted:
                     detections[item['index']]['skip'] = 'role_assignment_uncertain'
                 accepted = []
-        for group_index, group in enumerate(generation_groups(accepted, structure, request.get('generationKind'))):
+        groups = generation_groups(accepted, structure, request.get('generationKind'))
+        region_limit = None if structure else (2 if dual else 1)
+        if region_limit is not None and len(groups) > region_limit:
+            raise ValueError('DINO 生成人物区域超过上限：当前 %d，允许 %d，已停止避免重复覆盖' % (len(groups), region_limit))
+        report['generationRegionLimit'] = region_limit
+        report['generationRegionCount'] = len(groups)
+        report['generationGrouping'] = 'per_role_person' if dual else ('scene_level_sole' if sole_task else 'single_person')
+        for group_index, group in enumerate(groups):
             full = np.zeros((original.height, original.width), dtype=bool)
             bounds = [original.width, original.height, 0, 0]
             for item in group:

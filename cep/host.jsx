@@ -403,18 +403,41 @@ var AI_Shoe_CEP = (function () {
       if(!original.visible)throw Error('产品展示单鞋槽位已隐藏，请重新扫描');
       if(isVectorSmart(original))throw Error('矢量智能对象不支持直接替换');
       var file=new File(a.file);if(!file.exists)throw Error('bd_single01 素材不存在');
+      var content=null,image=null,opened=false;
       try{
         app.displayDialogs=DialogModes.NO;parent.activeLayer=original;var originalTransform=smartTransform(original);
+        if(!originalTransform)throw Error('产品展示单鞋缺少外层变换信息');
         var ref=new ActionReference();ref.putIdentifier(s('layer'),original.id);var ld=executeActionGet(ref);
         if(ld.hasKey(s('smartObject'))){var so=ld.getObjectValue(s('smartObject'));if(so.hasKey(s('linked'))&&so.getBoolean(s('linked')))throw Error('链接智能对象不自动替换');}
+        // Create an independent embedded instance, then edit inside its existing
+        // canvas. placedLayerReplaceContents uses the replacement file's own
+        // dimensions and can legitimately rewrite the outer transform; that was
+        // repeatedly misdiagnosed as slot movement for bd_single01 assets.
         executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);target=parent.activeLayer;
         if(target.id===original.id||target.kind!==LayerKind.SMARTOBJECT)throw Error('未创建独立产品展示单鞋实例');
-        var replacement=new ActionDescriptor();replacement.putPath(c('null'),file);executeAction(s('placedLayerReplaceContents'),replacement,DialogModes.NO);
+        if(!sameTransform(smartTransform(target),originalTransform,0.0001))throw Error('复制智能对象时外层变换发生变化，已停止避免错位');
+        var openIds={};for(var oi=0;oi<app.documents.length;oi++)openIds[app.documents[oi].id]=true;
+        parent.activeLayer=target;executeAction(s('placedLayerEditContents'),new ActionDescriptor(),DialogModes.NO);
+        content=app.activeDocument;if(content.id===parent.id||openIds[content.id])throw Error('无法安全打开独立智能对象内容，请关闭已打开的槽位内容后重试');
+        opened=true;
+        var cw=content.width.as('px'),ch=content.height.as('px');if(!(cw>0&&ch>0))throw Error('产品展示单鞋内部画布尺寸无效');
+        for(var li=0;li<content.layers.length;li++)content.layers[li].visible=false;
+        image=app.open(file);var placed=image.activeLayer.duplicate(content,ElementPlacement.PLACEATBEGINNING);
+        image.close(SaveOptions.DONOTSAVECHANGES);image=null;app.activeDocument=content;content.activeLayer=placed;
+        var pb=bounds(placed),pw=pb[2]-pb[0],ph=pb[3]-pb[1];if(!(pw>0&&ph>0))throw Error('bd_single01 素材没有可见像素');
+        var scale=Math.min(cw/pw,ch/ph)*100;placed.resize(scale,scale,AnchorPosition.MIDDLECENTER);pb=bounds(placed);
+        placed.translate(UnitValue((cw-(pb[2]-pb[0]))/2-pb[0],'px'),UnitValue((ch-(pb[3]-pb[1]))/2-pb[1],'px'));
+        placed.name='[AI-Shoe] bd_single01 '+a.product.sku+' '+a.product.color;
+        content.close(SaveOptions.SAVECHANGES);content=null;opened=false;app.activeDocument=parent;parent.activeLayer=target;
         var replacedTransform=smartTransform(target);
-        if(!sameTransform(replacedTransform,originalTransform,0.0001))throw Error('bd_single01 替换后智能对象变换发生变化，已停止避免错位');
+        if(!sameTransform(replacedTransform,originalTransform,0.0001))throw Error('bd_single01 内部置入后外层变换发生变化，已停止避免错位');
         target.name='[AI-Shoe] 产品展示单鞋 '+a.role+' '+a.product.sku+' '+a.product.color;target.visible=true;original.visible=false;
-        return {layerId:target.id,originalLayerId:original.id,asset:'bd_single01',scope:'existing_smart_object_transform'};
-      }catch(e){try{app.activeDocument=parent;parent.activeHistoryState=history;}catch(rollbackError){throw Error(e.message+'；回滚失败：'+rollbackError.message);}throw e;}
+        return {layerId:target.id,originalLayerId:original.id,asset:'bd_single01',scope:'preserved_internal_canvas'};
+      }catch(e){
+        if(image){try{image.close(SaveOptions.DONOTSAVECHANGES);}catch(imageCloseError){}}
+        if(content&&opened){try{content.close(SaveOptions.DONOTSAVECHANGES);}catch(contentCloseError){}}
+        try{app.activeDocument=parent;parent.activeHistoryState=history;}catch(rollbackError){throw Error(e.message+'；回滚失败：'+rollbackError.message);}throw e;
+      }
       finally{app.displayDialogs=dialogs;app.activeDocument=parent;}
     },
     applyProductDisplayRow:function(a){
