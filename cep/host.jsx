@@ -21,6 +21,13 @@ var AI_Shoe_CEP = (function () {
     for(var i=0;i<4;i++)if(typeof a[i]!=='number'||typeof b[i]!=='number'||!isFinite(a[i])||!isFinite(b[i])||Math.abs(a[i]-b[i])>tol)return false;
     return true;
   }
+  function smartTransform(layer){
+    var ref=new ActionReference();ref.putIdentifier(s('layer'),layer.id);var d=executeActionGet(ref);
+    if(!d.hasKey(s('smartObjectMore')))return null;var more=d.getObjectValue(s('smartObjectMore'));
+    if(!more.hasKey(s('transform')))return null;var list=more.getList(s('transform')),out=[];
+    for(var i=0;i<list.count;i++){var n=list.getDouble(i);if(!isFinite(n))throw Error('智能对象变换矩阵包含无效坐标');out.push(n);}return out;
+  }
+  function sameTransform(a,b,tol){if(!a||!b||a.length!==b.length)return false;for(var i=0;i<a.length;i++)if(Math.abs(a[i]-b[i])>tol)return false;return true;}
   function identityDisplayWarp(warp){
     try{
       var style=typeIDToStringID(warp.getEnumerationValue(s('warpStyle')));
@@ -388,13 +395,14 @@ var AI_Shoe_CEP = (function () {
       if(isVectorSmart(original))throw Error('矢量智能对象不支持直接替换');
       var file=new File(a.file);if(!file.exists)throw Error('bd_single01 素材不存在');
       try{
-        app.displayDialogs=DialogModes.NO;parent.activeLayer=original;var originalBounds=bounds(original);
+        app.displayDialogs=DialogModes.NO;parent.activeLayer=original;var originalTransform=smartTransform(original);
         var ref=new ActionReference();ref.putIdentifier(s('layer'),original.id);var ld=executeActionGet(ref);
         if(ld.hasKey(s('smartObject'))){var so=ld.getObjectValue(s('smartObject'));if(so.hasKey(s('linked'))&&so.getBoolean(s('linked')))throw Error('链接智能对象不自动替换');}
         executeAction(s('placedLayerMakeCopy'),new ActionDescriptor(),DialogModes.NO);target=parent.activeLayer;
         if(target.id===original.id||target.kind!==LayerKind.SMARTOBJECT)throw Error('未创建独立产品展示单鞋实例');
         var replacement=new ActionDescriptor();replacement.putPath(c('null'),file);executeAction(s('placedLayerReplaceContents'),replacement,DialogModes.NO);
-        if(!sameBox(bounds(target),originalBounds,0.5))throw Error('bd_single01 替换后图层边界发生变化，已停止避免错位');
+        var replacedTransform=smartTransform(target);
+        if(!sameTransform(replacedTransform,originalTransform,0.0001))throw Error('bd_single01 替换后智能对象变换发生变化，已停止避免错位');
         target.name='[AI-Shoe] 产品展示单鞋 '+a.role+' '+a.product.sku+' '+a.product.color;target.visible=true;original.visible=false;
         return {layerId:target.id,originalLayerId:original.id,asset:'bd_single01',scope:'existing_smart_object_transform'};
       }catch(e){try{app.activeDocument=parent;parent.activeHistoryState=history;}catch(rollbackError){throw Error(e.message+'；回滚失败：'+rollbackError.message);}throw e;}
