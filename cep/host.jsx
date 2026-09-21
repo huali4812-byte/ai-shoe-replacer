@@ -28,6 +28,13 @@ var AI_Shoe_CEP = (function () {
     for(var i=0;i<list.count;i++){var n=list.getDouble(i);if(!isFinite(n))throw Error('智能对象变换矩阵包含无效坐标');out.push(n);}return out;
   }
   function sameTransform(a,b,tol){if(!a||!b||a.length!==b.length)return false;for(var i=0;i<a.length;i++)if(Math.abs(a[i]-b[i])>tol)return false;return true;}
+  function dualRoleMarkerPlan(markers,currentRandom,randomValue){
+    var mainCount=0,secondaryCount=0;
+    for(var i=0;i<markers.length;i++){if(markers[i].role==='主推')mainCount++;else if(markers[i].role==='次推')secondaryCount++;}
+    if(markers.length===0)return {random:true,mainPair:currentRandom===0||currentRandom===1?currentRandom:(randomValue<.5?0:1)};
+    if(markers.length!==2||mainCount!==1||secondaryCount!==1)throw Error('双人任务的主推/次推文字不完整或重复；请同时保留各一个标记，或同时删除两个标记启用随机分配');
+    return {random:false,mainPair:null};
+  }
   function identityDisplayWarp(warp){
     try{
       var style=typeIDToStringID(warp.getEnumerationValue(s('warpStyle')));
@@ -254,7 +261,11 @@ var AI_Shoe_CEP = (function () {
         var f=new File(a.diagnostic);f.encoding='UTF8';f.open('w');f.write(json(diag));f.close();
         var markers=[];
         function collectMarkers(ls){for(var mi=0;mi<ls.length;mi++){var ml=ls[mi];if(ml.typename==='LayerSet'){collectMarkers(ml.layers);continue;}if(ml.kind===LayerKind.TEXT){var raw=String(ml.textItem.contents),text=raw.replace(/\s/g,''),role=text.indexOf('主推')>=0?'主推':text.indexOf('次推')>=0?'次推':null;if(role){var wasVisible=!!ml.visible;if(!wasVisible)ml.visible=true;var markerBounds=textMarkerBounds(ml);if(!wasVisible)ml.visible=false;if(markerBounds[2]>markerBounds[0]&&markerBounds[3]>markerBounds[1])markers.push({id:ml.id,role:role,bounds:markerBounds,wasVisible:wasVisible,text:raw,boundsSource:(bounds(ml)[2]>bounds(ml)[0]?'layer_bounds':'text_position')});}}}}
-        if(a.dualRole){collectMarkers(d.layers);var main=false,secondary=false;for(var mi=0;mi<markers.length;mi++){main=main||markers[mi].role==='主推';secondary=secondary||markers[mi].role==='次推';}if(!main||!secondary)throw Error('双人任务无法同时读取主推和次推文字坐标，已停止以避免款色换反；请确认智能对象内保留可编辑的主推/次推文字层');t.roleMarkers=markers;t.styleCount=markers.length;}
+        if(a.dualRole){
+          collectMarkers(d.layers);
+          var markerPlan=dualRoleMarkerPlan(markers,t.randomMainPair,Math.random());
+          t.roleMarkers=markers;t.styleCount=markers.length;t.randomMainPair=markerPlan.mainPair;
+        }
         // Structural callouts must be present in the immediate containing group.
         // A section name alone also matches people photographs in this template.
         var outer=find(parent.layers,t.layerId),contextText='';

@@ -19,6 +19,14 @@ function run(failure,restoreFailure,hide=false,clipped=true,settleMode='normal')
 const failed=run('save','internal');console.log('E internal restore failure:',JSON.stringify({error:failed.error,restores:failed.restores}));
 const partial=run();console.log('E partial marker:',JSON.stringify({moved:partial.moved,sameParent:partial.marker.parent===partial.group}));
 if(!baseline){
+ const planText=source.slice(source.indexOf('  function dualRoleMarkerPlan('),source.indexOf('  function identityDisplayWarp('));
+ const planCtx={};vm.runInNewContext(planText,planCtx);
+ const random0=planCtx.dualRoleMarkerPlan([],null,.2);assert.equal(random0.random,true);assert.equal(random0.mainPair,0);
+ const stable=planCtx.dualRoleMarkerPlan([],random0.mainPair,.9);assert.equal(stable.mainPair,0,'retry must retain the original random role assignment');
+ assert.equal(planCtx.dualRoleMarkerPlan([],null,.8).mainPair,1);
+ const marked=planCtx.dualRoleMarkerPlan([{role:'主推'},{role:'次推'}],1,.2);assert.equal(marked.random,false);assert.equal(marked.mainPair,null);
+ assert.throws(()=>planCtx.dualRoleMarkerPlan([{role:'主推'}],null,.2),/同时保留各一个标记，或同时删除/);
+ assert.throws(()=>planCtx.dualRoleMarkerPlan([{role:'主推'},{role:'主推'}],null,.2),/不完整或重复/);
  assert.deepEqual(failed.restores,['internal','parent']);assert(failed.task.recoveryBlocked);assert(failed.original.visible);assert(failed.error.includes('save fault')&&failed.error.includes('回滚未完成'));
  assert.equal(partial.parent.activeLayer.grouped,true);
  assert.equal(partial.moved,0);assert.equal(partial.marker.parent,partial.group);assert.equal(partial.marker.grouped,true);assert.equal(partial.group.opacity,40);assert(partial.marker.visible);
@@ -30,5 +38,5 @@ if(!baseline){
  const rp=run('replace','parent');assert.deepEqual(rp.restores,['internal','parent']);assert(rp.task.recoveryBlocked);
  const lookup=source.slice(source.indexOf('  function smartTask('),source.indexOf('  function json('));
  const c={smartTasks:{p:failed.task}};vm.runInNewContext(lookup,c);assert.throws(()=>c.smartTask('p-r0'),/锁定/);
- console.log('PASS: no marker reparenting, five injected failure stages, independent history attempts, lock after failed rollback');
+ console.log('PASS: zero labels enable stable random roles; partial/duplicate labels stop; marker transactions remain safe');
 }else console.log('BASELINE REPRODUCED');
