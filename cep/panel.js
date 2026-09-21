@@ -17,6 +17,16 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
   async function act(fn,uiLabel){if(state.busy)return;state.busy=true;if(uiLabel)showBatchStage(uiLabel);try{render();await fn();}catch(e){recordFailure(e,'panel_action');message('操作失败：'+e.message+'；日志：'+(e.failureLog||'写入失败，请复制错误'));}finally{state.busy=false;batchStage='';try{render();}catch(e){recordFailure(e,'render');message('面板刷新失败：'+e.message);}}}
   function button(text,fn,disabled){const b=document.createElement('button');b.textContent=text;b.disabled=state.busy||disabled;b.onclick=()=>act(fn);return b;}
   let revisions;
+  const candidateViewer={candidates:[],index:0,parent:null,region:null};
+  function closeCandidateViewer(){$('candidateViewer').hidden=true;candidateViewer.candidates=[];candidateViewer.parent=null;candidateViewer.region=null;}
+  function updateCandidateViewer(){const v=candidateViewer,c=v.candidates[v.index];if(!c){closeCandidateViewer();return;}$('candidateViewerImage').src=(typeof require==='function'?require:window.cep_node.require)('url').pathToFileURL(c.composition.output).href;$('candidateViewerTitle').textContent='重换候选 '+(v.index+1);$('candidateViewerCount').textContent=(v.index+1)+' / '+v.candidates.length;$('candidateViewerPrev').disabled=v.index===0;$('candidateViewerNext').disabled=v.index===v.candidates.length-1;$('candidateViewerApply').disabled=state.busy;}
+  function openCandidateViewer(candidates,index,parent,region){candidateViewer.candidates=candidates;candidateViewer.index=index;candidateViewer.parent=parent;candidateViewer.region=region;$('candidateViewer').hidden=false;updateCandidateViewer();}
+  $('candidateViewerClose').onclick=closeCandidateViewer;
+  $('candidateViewer').onclick=e=>{if(e.target===$('candidateViewer'))closeCandidateViewer();};
+  $('candidateViewerPrev').onclick=()=>{if(candidateViewer.index>0){candidateViewer.index--;updateCandidateViewer();}};
+  $('candidateViewerNext').onclick=()=>{if(candidateViewer.index+1<candidateViewer.candidates.length){candidateViewer.index++;updateCandidateViewer();}};
+  $('candidateViewerApply').onclick=()=>act(async()=>{const v=candidateViewer,c=v.candidates[v.index],n=v.index+1;if(!c||!v.parent||!v.region)throw Error('当前候选查看状态已失效');await revisionService().apply(v.parent,v.region,c);updateParent(v.parent);closeCandidateViewer();message('候选 '+n+' 已应用，其他候选已归档。');});
+  document.addEventListener('keydown',e=>{if($('candidateViewer').hidden)return;if(e.key==='Escape')closeCandidateViewer();else if(e.key==='ArrowLeft')$('candidateViewerPrev').click();else if(e.key==='ArrowRight')$('candidateViewerNext').click();});
   const revisionForms=new Map();
   function revisionService(){
     if(!revisions){const req=typeof require==='function'?require:window.cep_node.require;revisions=req(path.join(folder,'revisions.cjs')).createRevisions({api,vision,host,root:path.join(os.homedir(),'Pictures','AI-Shoe-Revisions')});}
@@ -40,7 +50,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
     if(candidates.length){
       const current=document.createElement('p');current.textContent='已有 '+candidates.length+' 张重换候选；点击图片打开大图，确认后单独应用。';wrap.appendChild(current);
       const comparison=document.createElement('div');comparison.className='revision-comparison';
-      candidates.forEach((candidate,ci)=>{const figure=document.createElement('figure'),caption=document.createElement('figcaption'),img=document.createElement('img');caption.textContent='候选 '+(ci+1);img.alt=caption.textContent;img.src=(typeof require==='function'?require:window.cep_node.require)('url').pathToFileURL(candidate.composition.output).href;img.style.cursor='zoom-in';img.onclick=()=>window.open(img.src,'_blank');figure.appendChild(caption);figure.appendChild(img);figure.appendChild(button('应用候选 '+(ci+1),async()=>{await revisionService().apply(parent,r,candidate);updateParent(parent);message('候选 '+(ci+1)+' 已应用，其他候选已归档。');},false));comparison.appendChild(figure);});
+      candidates.forEach((candidate,ci)=>{const figure=document.createElement('figure'),caption=document.createElement('figcaption'),img=document.createElement('img');caption.textContent='候选 '+(ci+1);img.alt=caption.textContent;img.src=(typeof require==='function'?require:window.cep_node.require)('url').pathToFileURL(candidate.composition.output).href;img.style.cursor='zoom-in';img.onclick=()=>openCandidateViewer(candidates,ci,parent,r);figure.appendChild(caption);figure.appendChild(img);figure.appendChild(button('应用候选 '+(ci+1),async()=>{await revisionService().apply(parent,r,candidate);updateParent(parent);message('候选 '+(ci+1)+' 已应用，其他候选已归档。');},false));comparison.appendChild(figure);});
       wrap.appendChild(comparison);
       wrap.appendChild(button('全部不采用，保留当前版本',async()=>{revisionService().discard(r);message('已保留当前版本，全部重换候选已归档。');},false));
     }else{

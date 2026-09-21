@@ -144,3 +144,14 @@ body[data-theme] .task .task-toggle:hover{background:#52637d;border:0}
 body[data-theme] .revision-comparison img{background:var(--canvas)}
 body[data-theme] ::-webkit-scrollbar-thumb{background:var(--scroll);border-color:var(--canvas)}
 body[data-theme] ::-webkit-scrollbar-thumb:hover{background:var(--secondary)}
+.candidate-viewer{position:fixed;inset:0;z-index:9999;background:#000c;display:flex;align-items:center;justify-content:center;padding:18px}
+.candidate-viewer[hidden]{display:none}
+.candidate-viewer-card{display:flex;flex-direction:column;width:min(94vw,1100px);height:min(94vh,900px);min-width:0;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 18px 60px #000a;overflow:hidden}
+.candidate-viewer-card header,.candidate-viewer-card footer{display:flex;align-items:center;gap:10px;flex:none;padding:10px 12px;background:var(--card)}
+.candidate-viewer-card header{justify-content:space-between;border-bottom:1px solid var(--line)}
+.candidate-viewer-card footer{justify-content:center;border-top:1px solid var(--line);flex-wrap:wrap}
+.candidate-viewer-card header button{font-size:22px;min-width:36px;padding:2px 9px}
+.candidate-viewer-stage{display:flex;align-items:center;justify-content:center;flex:1;min-height:0;overflow:auto;background:#15171b;padding:12px}
+.candidate-viewer-stage img{display:block;max-width:100%;max-height:100%;object-fit:contain}
+#candidateViewerCount{min-width:72px;text-align:center;color:var(--secondary)}
+#candidateViewerApply{margin-left:12px}
