@@ -21,6 +21,21 @@ a = np.asarray(mask)
 assert np.all(a[edit[1]-crop[1]:edit[3]-crop[1], edit[0]-crop[0]:edit[2]-crop[0]] == 255)
 assert np.count_nonzero(a) == (edit[2]-edit[0]) * (edit[3]-edit[1])
 
+# Portrait canvases must never produce an off-canvas square wider than the
+# canvas. This exact shape previously yielded [-1033, 0, 2417, 3450] and forced
+# a 1024px AI result to be enlarged 3.37x.
+portrait = vision.square_box([11, 548, 1374, 2879], (1888, 3840))
+assert portrait == [0, 769, 1888, 2657], portrait
+
+# Real 4522 regression: two full-frame shoes were 11–13k pixels, while two
+# low-confidence tile false positives covered 67k and 220k pixels and later
+# overwrote the sharp generation. Both scale outliers must be rejected.
+full_max = 13434
+assert vision.tile_scale_outlier({'box':[54,845,365,1063], 'pass':'tile', 'score':.325}, full_max)
+assert vision.tile_scale_outlier({'box':[205,367,522,1061], 'pass':'tile', 'score':.303}, full_max)
+assert not vision.tile_scale_outlier({'box':[54,845,165,963], 'pass':'tile', 'score':.325}, full_max)
+assert not vision.tile_scale_outlier({'box':[54,845,365,1063], 'pass':'tile', 'score':.55}, full_max)
+
 # Composition must use the padded rectangle exactly: no old SAM-style edge
 # dilation, no polarity inference, and no changes outside the writable box.
 with tempfile.TemporaryDirectory() as folder:
@@ -75,6 +90,21 @@ with tempfile.TemporaryDirectory() as folder:
     assert np.array_equal(np.asarray(restored.getchannel('A')), np.asarray(rgba.getchannel('A')))
     assert np.all(np.asarray(restored.convert('RGB'))[15, 15] == (255, 0, 0))
 
+# Excessive AI enlargement is rejected instead of writing a blurred shoe.
+with tempfile.TemporaryDirectory() as folder:
+    p = Path(folder)
+    Image.new('RGB', (2100, 2100), 'white').save(p / 'source.png')
+    Image.new('L', (2100, 2100), 255).save(p / 'mask.png')
+    Image.new('RGB', (1024, 1024), 'red').save(p / 'generated.png')
+    region = {'box':[0,0,2100,2100], 'mask':str(p/'mask.png'), 'maskMode':'dino_rectangle',
+              'noMaskExpansion':True, 'generated':str(p/'generated.png'), 'output':str(p/'patch.png')}
+    try:
+        vision.compose_parent({'source':str(p/'source.png'), 'output':str(p/'out.png'), 'regions':[region]})
+    except ValueError as exc:
+        assert '生成清晰度不足' in str(exc)
+    else:
+        raise AssertionError('excessive AI enlargement accepted')
+
 # Mismatched model aspect ratio remains a hard failure.
 with tempfile.TemporaryDirectory() as folder:
     p = Path(folder)
@@ -96,4 +126,4 @@ assert "transparent:false" in panel and "output,patches:null" in panel
 assert "transparent:false" in revisions and "output:composition.output,patches:null" in revisions
 assert "transparent:true" not in panel and "transparent:!!p.dualRole" not in revisions
 
-print('PASS: DINO rectangle ownership, opaque AI scenes, preserved source alpha, padded square context, and aspect guard')
+print('PASS: DINO ownership, in-canvas crops, resolution guard, opaque scenes, alpha preservation, and aspect guard')

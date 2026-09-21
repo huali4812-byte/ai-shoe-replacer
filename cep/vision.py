@@ -51,16 +51,27 @@ def square_box(box, size, padding=0.24, min_margin=24):
     x0, y0, x1, y1 = box
     extent=max(1,x1-x0,y1-y0)
     side=max(1,math.ceil(extent+2*max(min_margin,extent*padding)))
-    width,height=size;side=min(side,max(width,height))
+    width,height=size
+    # A square crop must fit both canvas axes. Using max(width, height) allowed
+    # portrait scenes to create huge negative-x crops (for example 3450px wide
+    # on a 1888px canvas), which were padded and then upscaled from a 1024px AI
+    # result. That made otherwise detailed shoes visibly soft after writeback.
+    side=min(side,width,height)
     cx,cy=(x0+x1)/2,(y0+y1)/2
-    left=math.floor(cx-side/2);top=math.floor(cy-side/2)
-    if side<=width:left=min(max(0,left),width-side)
-    if side<=height:top=min(max(0,top),height-side)
+    left=min(max(0,math.floor(cx-side/2)),width-side)
+    top=min(max(0,math.floor(cy-side/2)),height-side)
     return [left,top,left+side,top+side]
 
 def safe_box(box, size, xpad=.14, ypad=.18):
     x0,y0,x1,y1=box; w,h=size; bw=max(1,x1-x0); bh=max(1,y1-y0)
     return [max(0,int(x0-bw*xpad)),max(0,int(y0-bh*ypad)),min(w,int(x1+bw*xpad)),min(h,int(y1+bh*ypad))]
+
+
+def tile_scale_outlier(detection, full_frame_max_area, factor=4):
+    box = detection['box']
+    area = max(0, box[2]-box[0]) * max(0, box[3]-box[1])
+    return bool(detection.get('pass') == 'tile' and detection.get('score', 0) < .4 and
+                full_frame_max_area and area > full_frame_max_area * factor)
 
 
 def dino_rectangle_region(box, size, xpad=.16, ypad=.20, min_margin=32):
@@ -373,8 +384,11 @@ def composite(request):
     if generated.size != size:
         if abs((generated.width / generated.height) / (size[0] / size[1]) - 1) > 0.01:
             raise ValueError(f'生成比例不符：{generated.width}x{generated.height}，区域 {size[0]}x{size[1]}，禁止回写')
-        # Preserve the model output aspect ratio; never stretch a shoe.
+        # Preserve the model output aspect ratio; never stretch a shoe. Refuse
+        # severe enlargement instead of writing a visibly blurred replacement.
         scale = min(size[0] / generated.width, size[1] / generated.height)
+        if scale > 2.0:
+            raise ValueError(f'生成清晰度不足：{generated.width}x{generated.height} 需放大 {scale:.2f} 倍到区域 {size[0]}x{size[1]}，禁止回写')
         fitted = generated.resize((max(1, round(generated.width * scale)), max(1, round(generated.height * scale))), Image.Resampling.LANCZOS)
         canvas = Image.new('RGB', size, (0, 0, 0))
         canvas.paste(fitted, ((size[0] - fitted.width) // 2, (size[1] - fitted.height) // 2))
@@ -769,11 +783,20 @@ class Vision:
             return [box[0] * sx, box[1] * sy, box[2] * sx, box[3] * sy]
         dual = bool(request.get('roleMarkers') or request.get('randomPairRoles'))
         sole_task = request.get('generationKind') == 'sole'
-        sole_max_area = max((max(0, d['box'][2]-d['box'][0]) * max(0, d['box'][3]-d['box'][1])
-                             for d in shoes), default=0)
+        shoe_area = lambda d: max(0, d['box'][2]-d['box'][0]) * max(0, d['box'][3]-d['box'][1])
+        sole_max_area = max((shoe_area(d) for d in shoes), default=0)
+        # Tiled detection recovers tiny shoes in large canvases, but may label a
+        # person's lower body or a broad scene strip as another shoe. Once the
+        # full-frame pass has real shoes, a tile box over four times larger than
+        # every full-frame shoe is a scale outlier, not an additional shoe.
+        full_frame_max_area = max((shoe_area(d) for d in shoes if d.get('pass') != 'tile'), default=0)
         accepted = []
         for i, d in enumerate(detections):
             if 'shoe' not in d['label']:
+                continue
+            area = shoe_area(d)
+            if tile_scale_outlier(d, full_frame_max_area):
+                d['skip'] = 'tile_candidate_scale_outlier'
                 continue
             if sole_task:
                 # Sole replacement is scene-level, but DINO can also fire on a
@@ -781,7 +804,6 @@ class Vision:
                 # false positive caused a third local patch and a rectangular
                 # overwrite. Keep only substantial sole-sized detections; do
                 # not infer contours or alter the retained rectangle itself.
-                area = max(0, d['box'][2]-d['box'][0]) * max(0, d['box'][3]-d['box'][1])
                 if sole_max_area and area < sole_max_area * .55:
                     d['skip'] = 'sole_secondary_small_detection'
                     continue
