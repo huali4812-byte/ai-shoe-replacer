@@ -90,7 +90,7 @@ with tempfile.TemporaryDirectory() as folder:
     assert np.array_equal(np.asarray(restored.getchannel('A')), np.asarray(rgba.getchannel('A')))
     assert np.all(np.asarray(restored.convert('RGB'))[15, 15] == (255, 0, 0))
 
-# Excessive AI enlargement is rejected instead of writing a blurred shoe.
+# Matching aspect ratio is accepted even when the AI result needs enlargement.
 with tempfile.TemporaryDirectory() as folder:
     p = Path(folder)
     Image.new('RGB', (2100, 2100), 'white').save(p / 'source.png')
@@ -98,12 +98,9 @@ with tempfile.TemporaryDirectory() as folder:
     Image.new('RGB', (1024, 1024), 'red').save(p / 'generated.png')
     region = {'box':[0,0,2100,2100], 'mask':str(p/'mask.png'), 'maskMode':'dino_rectangle',
               'noMaskExpansion':True, 'generated':str(p/'generated.png'), 'output':str(p/'patch.png')}
-    try:
-        vision.compose_parent({'source':str(p/'source.png'), 'output':str(p/'out.png'), 'regions':[region]})
-    except ValueError as exc:
-        assert '生成清晰度不足' in str(exc)
-    else:
-        raise AssertionError('excessive AI enlargement accepted')
+    result = vision.compose_parent({'source':str(p/'source.png'), 'output':str(p/'out.png'), 'regions':[region]})
+    assert result['regions'][0]['size'] == [2100, 2100]
+    assert Image.open(p / 'out.png').size == (2100, 2100)
 
 # Mismatched model aspect ratio remains a hard failure.
 with tempfile.TemporaryDirectory() as folder:
@@ -126,4 +123,4 @@ assert "transparent:false" in panel and "output,patches:null" in panel
 assert "transparent:false" in revisions and "output:composition.output,patches:null" in revisions
 assert "transparent:true" not in panel and "transparent:!!p.dualRole" not in revisions
 
-print('PASS: DINO ownership, in-canvas crops, resolution guard, opaque scenes, alpha preservation, and aspect guard')
+print('PASS: DINO ownership, in-canvas crops, proportional enlargement, opaque scenes, alpha preservation, and aspect guard')

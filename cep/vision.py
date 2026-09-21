@@ -384,11 +384,10 @@ def composite(request):
     if generated.size != size:
         if abs((generated.width / generated.height) / (size[0] / size[1]) - 1) > 0.01:
             raise ValueError(f'生成比例不符：{generated.width}x{generated.height}，区域 {size[0]}x{size[1]}，禁止回写')
-        # Preserve the model output aspect ratio; never stretch a shoe. Refuse
-        # severe enlargement instead of writing a visibly blurred replacement.
+        # Preserve the model output aspect ratio and allow proportional resizing.
+        # Resolution alone is advisory: a lower-resolution result must not block
+        # writeback when its aspect ratio matches the target region.
         scale = min(size[0] / generated.width, size[1] / generated.height)
-        if scale > 2.0:
-            raise ValueError(f'生成清晰度不足：{generated.width}x{generated.height} 需放大 {scale:.2f} 倍到区域 {size[0]}x{size[1]}，禁止回写')
         fitted = generated.resize((max(1, round(generated.width * scale)), max(1, round(generated.height * scale))), Image.Resampling.LANCZOS)
         canvas = Image.new('RGB', size, (0, 0, 0))
         canvas.paste(fitted, ((size[0] - fitted.width) // 2, (size[1] - fitted.height) // 2))
