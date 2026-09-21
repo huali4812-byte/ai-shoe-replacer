@@ -10,10 +10,10 @@ spec = importlib.util.spec_from_file_location('vision', ROOT / 'cep' / 'vision.p
 vision = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vision)
 
-# DINO ownership is rectangular; AI context is a larger square with the same
-# dimensions as the stored local mask.
+# DINO ownership is padded into a writable safety rectangle; AI context is a
+# still larger square around that rectangle.
 edit, crop, mask = vision.dino_rectangle_region([100.2, 120.4, 199.1, 180.2], (500, 400))
-assert edit == [100, 120, 200, 181]
+assert edit == [68, 88, 232, 213]
 assert crop[2] - crop[0] == crop[3] - crop[1]
 assert crop[0] < edit[0] and crop[1] < edit[1]
 assert mask.size == (crop[2] - crop[0], crop[3] - crop[1])
@@ -21,8 +21,8 @@ a = np.asarray(mask)
 assert np.all(a[edit[1]-crop[1]:edit[3]-crop[1], edit[0]-crop[0]:edit[2]-crop[0]] == 255)
 assert np.count_nonzero(a) == (edit[2]-edit[0]) * (edit[3]-edit[1])
 
-# Composition must use the rectangle exactly: no old SAM-style edge dilation,
-# no polarity inference, and no changes in the padded context outside the box.
+# Composition must use the padded rectangle exactly: no old SAM-style edge
+# dilation, no polarity inference, and no changes outside the writable box.
 with tempfile.TemporaryDirectory() as folder:
     p = Path(folder)
     source = Image.new('RGB', mask.size, 'white')

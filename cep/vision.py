@@ -63,11 +63,20 @@ def safe_box(box, size, xpad=.14, ypad=.18):
     return [max(0,int(x0-bw*xpad)),max(0,int(y0-bh*ypad)),min(w,int(x1+bw*xpad)),min(h,int(y1+bh*ypad))]
 
 
-def dino_rectangle_region(box, size):
-    """Use the detector rectangle as ownership and a padded square as AI context."""
+def dino_rectangle_region(box, size, xpad=.16, ypad=.20, min_margin=32):
+    """Pad DINO ownership, then add a larger square AI context around it.
+
+    Grounding DINO boxes can end exactly on a pull tab, toe, or bent sole. An
+    unpadded ownership box creates a hard rectangular seam even when the model
+    received enough scene context. The padded rectangle is therefore the local
+    writable safety boundary; pixels outside it remain immutable.
+    """
     width, height = size
-    edit = [max(0, int(math.floor(box[0]))), max(0, int(math.floor(box[1]))),
-            min(width, int(math.ceil(box[2]))), min(height, int(math.ceil(box[3])))]
+    x0, y0, x1, y1 = box
+    bw, bh = max(1, x1-x0), max(1, y1-y0)
+    mx, my = max(min_margin, bw*xpad), max(min_margin, bh*ypad)
+    edit = [max(0, int(math.floor(x0-mx))), max(0, int(math.floor(y0-my))),
+            min(width, int(math.ceil(x1+mx))), min(height, int(math.ceil(y1+my)))]
     if edit[2] <= edit[0] or edit[3] <= edit[1]:
         raise ValueError('DINO 鞋框为空')
     crop = square_box(edit, size)
@@ -738,7 +747,7 @@ class Vision:
                 if not duplicate:
                     detections.append({'box':box,'score':score,'label':'a shoe','pass':'tile'})
         shoes = [d for d in detections if 'shoe' in d['label']]
-        report = {'source':request['source'], 'size':list(original.size), 'detections':detections, 'regions':[], 'detector':'grounding-dino-tiny', 'maskMode':'dino_rectangle', 'safePadding':{'fraction':.24,'minimumPixels':24,'shape':'square'}, 'sceneType':'shoe_structure' if structure else 'person'}
+        report = {'source':request['source'], 'size':list(original.size), 'detections':detections, 'regions':[], 'detector':'grounding-dino-tiny', 'maskMode':'dino_rectangle', 'writablePadding':{'xFraction':.16,'yFraction':.20,'minimumPixels':32,'shape':'rectangle'}, 'safePadding':{'fraction':.24,'minimumPixels':24,'shape':'square','appliesAfterWritablePadding':True}, 'sceneType':'shoe_structure' if structure else 'person'}
         if not shoes:
             report['status'] = 'no_shoe_detected'
             return report
@@ -757,7 +766,10 @@ class Vision:
         for i, d in enumerate(detections):
             if 'shoe' not in d['label']:
                 continue
-            edit_box, crop_box, _ = dino_rectangle_region(original_box(d['box']), original.size)
+            detector_box = original_box(d['box'])
+            edit_box, crop_box, _ = dino_rectangle_region(detector_box, original.size)
+            d['detector_box'] = [int(math.floor(detector_box[0])), int(math.floor(detector_box[1])),
+                                 int(math.ceil(detector_box[2])), int(math.ceil(detector_box[3]))]
             d['dino_box'] = edit_box
             d['safe_box'] = crop_box
             d['segmentationMode'] = 'dino_rectangle'
@@ -816,6 +828,7 @@ class Vision:
             report['regions'].append({'index':group_index,'role':group[0].get('role'),'box':box,
                                       'maskMode':'dino_rectangle','maskCorrection':None,
                                       'pullTabRecovery':[], 'noMaskExpansion':True,
+                                      'detectorBoxes':[detections[item['index']].get('detector_box') for item in group],
                                       'dinoBoxes':[detections[item['index']].get('dino_box') for item in group],
                                       'safeBoxes':[detections[item['index']].get('safe_box') for item in group],
                                       'input':str(input_path),
