@@ -74,6 +74,31 @@ def tile_scale_outlier(detection, full_frame_max_area, factor=4):
                 full_frame_max_area and area > full_frame_max_area * factor)
 
 
+def filter_single_person_footline(accepted, detections, canvas_height, band_fraction=.20):
+    """Remove clearly separated upper-body false positives from one-person scenes.
+
+    A person has at most two physical shoes. Do not merely take the first or two
+    highest-scoring boxes: when DINO reports more, retain a bottom pair only if
+    both boxes occupy the same lower footline band and every other detection
+    ends above that pair. Ambiguous arrangements are returned unchanged so the
+    caller can stop safely instead of asking the image model to invent shoes.
+    """
+    if len(accepted) <= 2:
+        return list(accepted), []
+    def box(item):
+        return detections[item['index']].get('detector_box') or item.get('bounds')
+    maximum_bottom = max(box(item)[3] for item in accepted)
+    band = max(32, canvas_height * band_fraction)
+    lower = [item for item in accepted if box(item)[3] >= maximum_bottom - band]
+    if len(lower) != 2:
+        return list(accepted), []
+    lower_top = min(box(item)[1] for item in lower)
+    upper = [item for item in accepted if item not in lower]
+    if not upper or any(box(item)[3] > lower_top for item in upper):
+        return list(accepted), []
+    return lower, upper
+
+
 def dino_rectangle_region(box, size, xpad=.16, ypad=.20, min_margin=32):
     """Pad DINO ownership, then add a larger square AI context around it.
 
@@ -834,6 +859,15 @@ class Vision:
                              'cropBox':crop_box, 'score':d['score'],
                              'segmentationScore':None, 'protectedOverlap':0})
         role_error = None
+        if not dual and not sole_task and not structure and len(accepted) > 2:
+            accepted, upper_false_positives = filter_single_person_footline(
+                accepted, detections, original.height)
+            for item in upper_false_positives:
+                detections[item['index']]['skip'] = 'single_person_upper_body_detection'
+            if len(accepted) > 2:
+                for item in accepted:
+                    detections[item['index']]['skip'] = 'single_person_detection_ambiguous'
+                raise ValueError('普通单人场景检测到超过两只鞋，且无法可靠排除误检，已停止避免生成悬浮或重复鞋')
         if dual:
             try:
                 if request.get('roleMarkers'):

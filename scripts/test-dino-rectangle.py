@@ -36,6 +36,24 @@ assert vision.tile_scale_outlier({'box':[205,367,522,1061], 'pass':'tile', 'scor
 assert not vision.tile_scale_outlier({'box':[54,845,165,963], 'pass':'tile', 'score':.325}, full_max)
 assert not vision.tile_scale_outlier({'box':[54,845,365,1063], 'pass':'tile', 'score':.55}, full_max)
 
+# Real 12050 regression: DINO found the two shoes at the person's feet plus
+# two huge upper-body/trouser false positives. A one-person task may retain the
+# clear bottom pair, but must never merge all four into one AI scene edit.
+boxes = [[428,1542,1107,2097], [3,1456,591,1783],
+         [148,3,757,1395], [621,919,1025,1398]]
+detections = [{'detector_box': box} for box in boxes]
+accepted = [{'index': i, 'bounds': box} for i, box in enumerate(boxes)]
+kept, skipped = vision.filter_single_person_footline(accepted, detections, 2103)
+assert [item['index'] for item in kept] == [0, 1], kept
+assert [item['index'] for item in skipped] == [2, 3], skipped
+# More than two boxes sharing the footline is ambiguous and must not be
+# silently truncated by score or detector order.
+ambiguous_boxes = [[10,1500,300,1900], [350,1510,650,1910], [700,1490,1000,1920]]
+ambiguous_detections = [{'detector_box': box} for box in ambiguous_boxes]
+ambiguous = [{'index': i, 'bounds': box} for i, box in enumerate(ambiguous_boxes)]
+kept, skipped = vision.filter_single_person_footline(ambiguous, ambiguous_detections, 2103)
+assert len(kept) == 3 and not skipped
+
 # Composition must use the padded rectangle exactly: no old SAM-style edge
 # dilation, no polarity inference, and no changes outside the writable box.
 with tempfile.TemporaryDirectory() as folder:
