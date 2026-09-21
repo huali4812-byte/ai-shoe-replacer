@@ -159,7 +159,13 @@ def _pair_bucket(items):
 def generation_groups(regions, structure=False, generation_kind=None):
     """Generate pairs only for pair tasks; marked single tasks stay single."""
     if structure:return group_nearby_regions(regions)
-    if generation_kind in ('single_main','single_secondary','sole'):
+    if generation_kind == 'sole':
+        # A sole task is one scene-level edit. Multiple DINO detections may be
+        # the two visible soles plus nearby shoe structure, but they must share
+        # one scene input, one local ownership mask, and one AI result. Creating
+        # r0/r1/r2 here causes later full-scene patches to overwrite each other.
+        return [list(regions)] if regions else []
+    if generation_kind in ('single_main','single_secondary'):
         return [[r] for r in regions]
     buckets={}
     for region in regions:buckets.setdefault(region.get('role') or '__single_product__',[]).append(region)
@@ -762,10 +768,23 @@ class Vision:
         def original_box(box):
             return [box[0] * sx, box[1] * sy, box[2] * sx, box[3] * sy]
         dual = bool(request.get('roleMarkers') or request.get('randomPairRoles'))
+        sole_task = request.get('generationKind') == 'sole'
+        sole_max_area = max((max(0, d['box'][2]-d['box'][0]) * max(0, d['box'][3]-d['box'][1])
+                             for d in shoes), default=0)
         accepted = []
         for i, d in enumerate(detections):
             if 'shoe' not in d['label']:
                 continue
+            if sole_task:
+                # Sole replacement is scene-level, but DINO can also fire on a
+                # smaller central upper/leg between two visible soles. That
+                # false positive caused a third local patch and a rectangular
+                # overwrite. Keep only substantial sole-sized detections; do
+                # not infer contours or alter the retained rectangle itself.
+                area = max(0, d['box'][2]-d['box'][0]) * max(0, d['box'][3]-d['box'][1])
+                if sole_max_area and area < sole_max_area * .55:
+                    d['skip'] = 'sole_secondary_small_detection'
+                    continue
             detector_box = original_box(d['box'])
             edit_box, crop_box, _ = dino_rectangle_region(detector_box, original.size)
             d['detector_box'] = [int(math.floor(detector_box[0])), int(math.floor(detector_box[1])),
@@ -834,6 +853,7 @@ class Vision:
                                       'input':str(input_path),
                                       'mask':str(mask_path),'shoeCount':len(group),
                                       'detectionIndexes':[item['index'] for item in group],
+                                      'generationKind':request.get('generationKind'),
                                       'score':min(item['score'] for item in group),
                                       'segmentationScore':None})
             overlay.paste(Image.new('RGB',original.size,(255,0,80)),(0,0),Image.fromarray((full*100).astype('uint8')))
