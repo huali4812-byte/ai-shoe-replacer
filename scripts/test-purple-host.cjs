@@ -24,7 +24,10 @@ if(!baseline){
  assert.match(source,/recognizedRole:role/);
  assert.match(source,/roleAssignmentMode=markerPlan\.random\?'stable_random':'text_coordinates'/);
  assert.match(source,/roleAssignmentMode='invalid_markers'/);
- const planText=source.slice(source.indexOf('  function dualRoleMarkerPlan('),source.indexOf('  function identityDisplayWarp('));
+ assert(source.includes("text.indexOf('主推')>=0&&text.indexOf('次推')<0"),'主推文字必须排除同时命中次推');
+assert(source.includes("text.indexOf('次推')>=0&&text.indexOf('主推')<0"),'次推文字必须排除同时命中主推');
+assert(source.includes("role='ambiguous'"),'同时包含主推和次推的文字必须标为歧义');
+const planText=source.slice(source.indexOf('  function dualRoleMarkerPlan('),source.indexOf('  function identityDisplayWarp('));
  const planCtx={};vm.runInNewContext(planText,planCtx);
  const random0=planCtx.dualRoleMarkerPlan([],null,.2);assert.equal(random0.random,true);assert.equal(random0.mainPair,0);
  const stable=planCtx.dualRoleMarkerPlan([],random0.mainPair,.9);assert.equal(stable.mainPair,0,'retry must retain the original random role assignment');

@@ -26,7 +26,7 @@ const VISION_FOLDER=path.join(os.homedir(),'Pictures','AI-Shoe-Vision');
   $('candidateViewerPrev').onclick=()=>{if(candidateViewer.index>0){candidateViewer.index--;updateCandidateViewer();}};
   $('candidateViewerNext').onclick=()=>{if(candidateViewer.index+1<candidateViewer.candidates.length){candidateViewer.index++;updateCandidateViewer();}};
   $('candidateViewerApply').onclick=()=>act(async()=>{const v=candidateViewer,c=v.candidates[v.index],n=v.index+1;if(!c||!v.parent||!v.region)throw Error('当前候选查看状态已失效');await revisionService().apply(v.parent,v.region,c);updateParent(v.parent);closeCandidateViewer();message('候选 '+n+' 已应用，其他候选已归档。');});
-  document.addEventListener('keydown',e=>{if($('candidateViewer').hidden)return;if(e.key==='Escape')closeCandidateViewer();else if(e.key==='ArrowLeft')$('candidateViewerPrev').click();else if(e.key==='ArrowRight')$('candidateViewerNext').click();});
+  if(document.addEventListener)document.addEventListener('keydown',e=>{if($('candidateViewer').hidden)return;if(e.key==='Escape')closeCandidateViewer();else if(e.key==='ArrowLeft')$('candidateViewerPrev').click();else if(e.key==='ArrowRight')$('candidateViewerNext').click();});
   const revisionForms=new Map();
   function revisionService(){
     if(!revisions){const req=typeof require==='function'?require:window.cep_node.require;revisions=req(path.join(folder,'revisions.cjs')).createRevisions({api,vision,host,root:path.join(os.homedir(),'Pictures','AI-Shoe-Revisions')});}
