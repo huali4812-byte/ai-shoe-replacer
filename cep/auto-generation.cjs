@@ -1,4 +1,5 @@
 'use strict';
+const path=require('path');
 const references=require('./reference-plan.cjs');
 const referenceGuide=require('./reference-guide.cjs');
 const INLINE_INSTRUCTIONS='\n【唯一款式依据】目标鞋主参考是唯一完整款式依据；如另有鞋底细节图，它只用于鞋底纹理、分区和颜色，不代表需要露出鞋底。参考图不是要复制到画面的产品照片。不要生成参考图的白底、黑底、阴影、第二只鞋或展示构图。\n【严格一对一替换】编辑蒙版内原来有几只鞋，输出仍只能有相同数量。每只新鞋必须占据对应旧鞋的位置、大小、朝向、左右脚、透视和遮挡；不得新增、复制或悬空任何鞋体、鞋带、魔术贴、Logo、提拉环、鞋底或零件。\n【场景保护】只替换蒙版内鞋体。人物、腿、袜子、裤子、地面、背景、文字、光影和蒙版外内容保持第一张图不变。不要输出产品图、拼图、对比图或说明文字，只返回与第一张相同尺寸的最终图。';
@@ -19,7 +20,8 @@ async function run({api,task,prompt,maskFirst=false,options={},record=()=>{}}){
    const plan={...fullPlan,entries:[soleCatalogEntry],files:[soleCatalogEntry.file],warnings:(fullPlan.warnings||[]).concat('鞋底两图模式：场景原图、t_sole鞋底')};
    task.referencePlan=plan;log.fullReferenceCount=fullPlan.files.length;log.referenceStrategy='scene_plus_t_sole';log.references=plan;log.imageOrder=[task.input,soleCatalogEntry.file];log.soleReferenceIndices=[0];log.soleStatus='dedicated_t_sole_bound';
    const row={attempt:1,strategy:'sole_two_image',status:'generating'};log.attempts.push(row);record(log);
-   row.output=await api.generate(task.input,[soleCatalogEntry.file],SOLE_PROMPT,{...options,imageLabels:['【图1：待编辑原图】只修改其中当前可见鞋底。','【图2：目标 t_sole 鞋底图】只提供目标大底轮廓、分区、颜色、纹路、材质和Logo。'],logoReferenceIndices:[],soleReferenceIndices:[0],maxAttempts:1});
+   const extra=options.additionalReferences||[];
+   row.output=await api.generate(task.input,[soleCatalogEntry.file].concat(extra),SOLE_PROMPT,{...options,imageLabels:['【图1：待编辑原图】只修改其中当前可见鞋底。','【图2：目标 t_sole 鞋底图】只提供目标大底轮廓、分区、颜色、纹路、材质和Logo。'].concat(options.additionalReferenceLabels||[]),logoReferenceIndices:[],soleReferenceIndices:[0],maxAttempts:1});
    row.status='received';log.status='received';record(log);return row.output;
   }
   if(compositeEntry&&pairEntry&&innerEntry){
@@ -66,7 +68,8 @@ async function run({api,task,prompt,maskFirst=false,options={},record=()=>{}}){
    const plan={...fullPlan,entries:selected,files:selected.map(e=>e.file),warnings:(fullPlan.warnings||[]).concat('固定四图模式：合成图、bd_pair、t_single02、场景；蒙版不上传')};
    task.referencePlan=plan;log.fullReferenceCount=fullPlan.files.length;log.referenceStrategy='catalog_composite_pair_single02_scene';log.references=plan;log.isolatedShoe=!!singleRole;log.logoReferenceIndices=[];log.logoStatus='derived_from_three_target_references';log.soleReferenceIndices=[];log.soleStatus='not_used_in_four_image_mode';log.imageOrder=[compositeEntry.file,pairEntry.file,innerEntry.file,task.input];
    const row={attempt:1,strategy:'catalog_four_image_single02',status:'generating'};log.attempts.push(row);record(log);
-   row.output=await api.generate(compositeEntry.file,[pairEntry.file,innerEntry.file,task.input],shortPrompt,{...options,imageLabels,logoReferenceIndices:[],soleReferenceIndices:[],maxAttempts:1});
+   const extra=options.additionalReferences||[];
+   row.output=await api.generate(compositeEntry.file,[pairEntry.file,innerEntry.file,task.input].concat(extra),shortPrompt,{...options,imageLabels:imageLabels.concat(options.additionalReferenceLabels||[]),logoReferenceIndices:[],soleReferenceIndices:[],maxAttempts:1});
    row.status='received';log.status='received';record(log);return row.output;
   }
   if(task.maskMode==='dino_rectangle'){
@@ -85,7 +88,7 @@ async function run({api,task,prompt,maskFirst=false,options={},record=()=>{}}){
   log.isolatedShoe=isolatedShoe;
   if(isolatedShoe)prompt+='\n【当前只处理一只鞋】黑白蒙版中的白色区域只对应这一只原鞋。不得把参考图本身作为第二只鞋放进场景，不得在鞋口、裤脚或背景附近增加任何独立零件。';
   if(maskFirst&&!task.visionMask)throw Error('缺少编辑蒙版');
-  const refs=(maskFirst?[task.visionMask]:[]).concat(plan.files);
+  const refs=(maskFirst?[task.visionMask]:[]).concat(plan.files,options.additionalReferences||[]);
   const logoFiles=new Set([...(task.material.logoReferences||[]),...plan.entries.filter(e=>e.detail==='logo').map(e=>e.file)]);
   const logoReferenceIndices=refs.map((file,i)=>logoFiles.has(file)&&file!==task.visionMask?i:-1).filter(i=>i>=0);
   log.logoReferenceIndices=logoReferenceIndices;
@@ -97,8 +100,15 @@ async function run({api,task,prompt,maskFirst=false,options={},record=()=>{}}){
   log.soleStatus=soleReferenceIndices.length?'dedicated_reference_bound':'no_dedicated_reference';
   const soleGuide=soleReferenceIndices.length?'\n【鞋底参考图号】'+soleReferenceIndices.map(i=>'图'+(i+1)).join('、')+'为本次目标鞋底专用参考。必须严格按该图的外底纹路、分区形状、橡胶块边界、沟槽深度、颗粒排布和材质层次还原，不得替换成波浪纹、人字纹或其他通用纹路。鞋底颜色、前后掌分区、侧墙接缝必须与该参考一致。只用于原场景实际可见的外底，不改变姿态露出原本不可见的底面，不用于鞋面或中底侧墙。':'';
   const guide=referenceGuide.build(plan.files,{maskFirst,entries:plan.entries});log.referenceGuide=guide;
+  if(options.additionalReferences&&options.additionalReferences.length){log.additionalReferences=options.additionalReferences.map(file=>path.basename(file));}
   const row={attempt:1,strategy:'full',status:'generating'};log.attempts.push(row);record(log);
-  row.output=await api.generate(task.input,refs,prompt+INLINE_INSTRUCTIONS+guide.text+logoGuide+soleGuide+REPLACEMENT_OVERRIDE,{...options,logoReferenceIndices,soleReferenceIndices,maxAttempts:1});
+  const imageLabels=['【图1：当前结果原场景】这是唯一编辑底图，保持画布、位置、数量、姿态和场景不变.'];
+  refs.forEach((file,i)=>{
+   if(maskFirst&&i===0)imageLabels.push('【图2：黑白编辑蒙版】只有白色区域允许修改。');
+   else if(i-(maskFirst?1:0)<plan.files.length)imageLabels.push('【参考图'+(i-(maskFirst?1:0)+1)+'】目标鞋款式与细节参考。');
+   else imageLabels.push((options.additionalReferenceLabels||[])[i-(maskFirst?1:0)-plan.files.length]||'【用户参考图】仅作为本次重做的补充参考，不改变第一张场景中的位置和数量。');
+  });
+  row.output=await api.generate(task.input,refs,prompt+INLINE_INSTRUCTIONS+guide.text+logoGuide+soleGuide+REPLACEMENT_OVERRIDE,{...options,imageLabels,logoReferenceIndices,soleReferenceIndices,maxAttempts:1});
   row.status='received';log.status='received';record(log);return row.output;
  }catch(e){log.status='failed';log.error=e.message;record(log);throw e;}
 }

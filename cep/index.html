@@ -14,7 +14,7 @@
       <section class="setup-section">
         <h2><span class="step">01</span> 当前文档</h2>
         <p id="doc">未读取文档</p>
-        <div class="button-row"><button id="scan">扫描标记</button><button id="working">创建工作副本</button></div>
+        <div class="button-row"><button id="scanAndWorking">扫描并创建工作副本</button></div>
         <button id="diagnostics" class="quiet-button">导出扫描诊断</button>
       </section>
       <section class="setup-section">
@@ -40,9 +40,9 @@
       </details>
       <details class="disclosure">
         <summary>处理说明</summary>
-        <p>自动进入智能对象，优先复用明确的鞋部蒙版；没有时自动检测并分割鞋部。检测失败会记录原因，符合条件的任务可手动选择鞋位。</p>
+        <p>点击“扫描并创建工作副本”后，插件只在副本上继续处理；原文档保持不变。自动进入智能对象，优先复用明确的鞋部蒙版；没有时自动检测并分割鞋部。检测失败会记录原因，符合条件的任务可手动选择鞋位。</p>
         <p>紫色双人图按智能对象内独立可见的“主推／次推”文字匹配对应款色。全部检测区域完成且无跳过候选时，在工作副本中隐藏提示文字；部分失败时保留提示。</p>
-        <p>先导出鞋位，AI 最多 8 并发生成，再串行回写。效果不满意时可勾选鞋位，批量重换每个鞋位生成4张候选；点击缩略图查看大图，确认后逐张应用。无保护选区仅保留预览；部分区域成功可先回写，同一面板会话内可再次批量补齐。</p>
+        <p>识别到一个鞋位后即可进入生成队列，AI 最多 8 并发生成；Photoshop准备/回写仍保持安全的串行边界。效果不满意时可勾选鞋位，批量重换每个鞋位生成4张候选；点击缩略图查看大图，确认后逐张应用。无保护选区仅保留预览；部分区域成功可先回写，同一面板会话内可再次批量补齐。</p>
         <p>结果写入工作副本，原文档保留。请检查款色、姿态、遮挡和边缘后另存 PSB。</p>
       </details>
     </div>

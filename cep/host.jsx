@@ -664,6 +664,12 @@ var AI_Shoe_CEP = (function () {
       exportCrop(d,box,a.output); return {box:box};
     },
     scan:scan,
+    scanAndCreateWorking:function () {
+      var d=documentFor();
+      if(working[d.id])return scan();
+      if(d.mode!==DocumentMode.RGB||d.bitsPerChannel!==BitsPerChannelType.EIGHT)throw Error('当前仅支持 RGB 8 位，避免隐式改变文档色彩和位深');
+      var copy=d.duplicate('[AI-Shoe] '+d.name,false);working[copy.id]={sourceId:d.id};app.activeDocument=copy;return scan();
+    },
     createWorking:function () {
       var d = documentFor(); if (working[d.id]) return scan();
       if (d.mode !== DocumentMode.RGB || d.bitsPerChannel !== BitsPerChannelType.EIGHT) throw Error('当前仅支持 RGB 8 位，避免隐式改变文档色彩和位深');

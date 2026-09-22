@@ -74,7 +74,7 @@ summary{cursor:pointer;font-size:12px;color:#c3c6ce;line-height:22px}
 
 .revision{border-top:1px solid #454851;margin-top:10px;padding-top:8px}.revision-pick{display:flex;align-items:center;gap:6px;color:#aeb9d2;font-size:11px;margin:6px 0}.revision-pick input{width:auto;min-width:14px}
 .revision summary{color:#c3d3ff}
-.revision textarea{display:block;width:100%;min-height:58px;resize:vertical;background:#222326;color:#eee;border:1px solid #50525a;border-radius:4px;padding:8px;margin:8px 0;font:inherit}
+.revision textarea{display:block;width:100%;min-height:58px;resize:vertical;background:#222326;color:#eee;border:1px solid #50525a;border-radius:4px;padding:8px;margin:8px 0;font:inherit}.revision-reference-title{display:block;margin-top:10px;color:var(--label);font-size:12px}.revision-reference-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:7px;margin:7px 0}.revision-reference{min-width:0;margin:0}.revision-reference img{display:block;width:100%;aspect-ratio:1;object-fit:contain;background:var(--canvas);border:1px solid var(--line);border-radius:4px}.revision-reference figcaption{font-size:10px;line-height:1.35;color:var(--secondary);margin-top:3px;overflow-wrap:break-word}.revision-reference button{width:100%;margin-top:3px;padding:3px 4px;font-size:10px}
 .revision-comparison{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
 .revision-comparison figure{margin:0;flex:1 1 130px;min-width:0}
 .revision-comparison img{display:block;width:100%;height:auto;max-height:260px;object-fit:contain;background:#202124}
