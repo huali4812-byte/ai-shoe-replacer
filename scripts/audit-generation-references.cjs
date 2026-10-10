@@ -243,7 +243,7 @@ if (require.main === module) {
   
   if (args.length === 0) {
     console.error('用法: node audit-generation-references.cjs <批次目录>');
-    console.error('示例: node audit-generation-references.cjs /Users/.../AI-Shoe-Preview/1789556497573');
+    console.error('示例: node audit-generation-references.cjs /path/to/AI-Shoe-Preview/example-batch');
     process.exit(1);
   }
 
