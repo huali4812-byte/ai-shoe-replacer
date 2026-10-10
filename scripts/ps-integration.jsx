@@ -1,6 +1,6 @@
 #target photoshop
-$.evalFile(new File('/Users/zhangjiabin/Documents/ps识别插件/cep/host.jsx'));
-var testRoot='/Users/zhangjiabin/Documents/ps识别插件/outputs/verification';
+$.evalFile(new File(File($.fileName).parent.parent.fsName+'/cep/host.jsx'));
+var testRoot=File($.fileName).parent.parent.fsName+'/outputs/verification';
 function call(method,args){var r=eval('('+AI_Shoe_CEP.dispatch(method,args)+')');if(!r.ok)throw Error(method+': '+r.error);return r.data;}
 function tag(layer,value){var s=stringIDToTypeID,desc=new ActionDescriptor(),ref=new ActionReference();ref.putIdentifier(s('layer'),layer.id);desc.putReference(s('null'),ref);var props=new ActionDescriptor();props.putEnumerated(s('color'),s('color'),s(value));desc.putObject(s('to'),s('layer'),props);executeAction(s('set'),desc,DialogModes.NO);}
 var original=app.activeDocument;
