@@ -1,7 +1,11 @@
 const fs=require('fs'),path=require('path'),cp=require('child_process');
 let child=null,pending=null,queue=Promise.resolve(),generation=0;
 function start(){
- const config=JSON.parse(fs.readFileSync(path.join(__dirname,'vision-runtime.json'),'utf8'));
+ const configFile=path.join(__dirname,'vision-runtime.json');
+ const config=fs.existsSync(configFile) ? JSON.parse(fs.readFileSync(configFile,'utf8')) : {};
+ config.python=process.env.AI_SHOE_PYTHON || config.python;
+ config.architecture=process.env.AI_SHOE_ARCH || config.architecture || (process.arch==='arm64'?'arm64':'x86_64');
+ if (!config.python) throw Error('请设置 AI_SHOE_PYTHON 或本地 vision-runtime.json');
  if(!fs.existsSync(config.python))throw Error('缺少本地视觉运行环境：'+config.python);
  if(!['arm64','x86_64'].includes(config.architecture))throw Error('视觉环境缺少有效 architecture 配置');
  const proc=cp.spawn('/usr/bin/arch',['-'+config.architecture,config.python,'-u',path.join(__dirname,'vision.py')],{env:{...process.env,HF_HUB_OFFLINE:'1',TOKENIZERS_PARALLELISM:'false'},stdio:['pipe','pipe','pipe']});
