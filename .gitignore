@@ -1,11 +1,32 @@
+# Environment secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+*credentials*.json
+*secrets*.json
+**/config.local.*
+cep/vision-runtime.json
+cep/vision-runtime.local.json
+
+# Build artifacts, local data and assets
 .DS_Store
 .shoe-vision-venv/
 .shoe-vision-venv-x86/
+.venv/
+venv/
+node_modules/
+/scripts/node_modules/
 outputs/
 backups/
-node_modules/
+*.log
 *.psb
 *.psd
 *.ccx
-
-/scripts/node_modules
+*.library/
+*.eaglepack
+AI-Shoe-Results/
+AI-Shoe-Tasks/
