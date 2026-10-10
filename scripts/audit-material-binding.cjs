@@ -230,7 +230,7 @@ if (require.main === module) {
   
   if (args.length === 0) {
     console.error('用法: node audit-material-binding.cjs <report.json路径>');
-    console.error('示例: node audit-material-binding.cjs /Users/.../AI-Shoe-Preview/1789556497573/report.json');
+    console.error('示例: node audit-material-binding.cjs /path/to/AI-Shoe-Preview/example-batch/report.json');
     process.exit(1);
   }
 
